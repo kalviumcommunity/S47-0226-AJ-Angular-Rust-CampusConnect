@@ -246,41 +246,6 @@ This architectural pattern enables our Campus ERP to serve thousands of concurre
 
 ---
 
-## PART 2: Video Demonstration Guide
-
-### Video Structure (2-4 minutes)
-
-#### Section 1: Architecture Diagram Walkthrough (60 seconds)
-- Display the flow diagram on screen
-- Explain each component's role:
-  - **Angular Component**: "This is where user interactions begin..."
-  - **Angular Service**: "The service layer abstracts HTTP communication..."
-  - **API Gateway**: "Routes requests to appropriate microservices..."
-  - **Rust Handler**: "Processes business logic with memory safety..."
-  - **PostgreSQL**: "Persists data with ACID guarantees..."
-  - **Response Flow**: "Data flows back through the same layers..."
-
-#### Section 2: Type-Safe Systems Explanation (45 seconds)
-**Why Angular Uses TypeScript:**
-- Catches errors during development, not in production
-- Provides IntelliSense and autocomplete for faster coding
-- Interfaces define clear data structures
-- Refactoring is safer with compile-time checks
-- Better collaboration through self-documenting code
-
-**Why Rust Ensures Memory Safety:**
-- Ownership system prevents memory leaks and dangling pointers
-- No garbage collector = predictable performance
-- Concurrency without data races
-- Zero-cost abstractions maintain performance
-- Compiler catches bugs before deployment
-
-**Combined Benefits:**
-- End-to-end type safety from UI to database
-- Fewer runtime errors and crashes
-- Predictable system behavior under load
-- Easier maintenance and debugging
-- Production stability with thousands of users
 
 #### Section 3: Case Study Answer (90 seconds)
 
