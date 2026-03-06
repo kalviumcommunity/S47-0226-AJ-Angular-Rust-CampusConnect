@@ -324,6 +324,66 @@ async fn get_maintenance_requests(
     Ok(HttpResponse::Ok().json(requests))
 }
 
+// ===== STUDENT DASHBOARD - HOSTEL STATUS =====
+
+async fn get_student_hostel_status(
+    data: web::Data<AppState>,
+    req: HttpRequest,
+    path: web::Path<String>,
+) -> Result<HttpResponse, Error> {
+    let claims = extract_claims(&req, &data.jwt_secret)
+        .map_err(|e| actix_web::error::ErrorUnauthorized(e))?;
+
+    let student_id = path.into_inner();
+    if claims.role == "student" && claims.sub != student_id {
+        return Ok(HttpResponse::Forbidden().json(serde_json::json!({
+            "error": "Access denied: You can only view your own hostel status"
+        })));
+    }
+
+    let allocation_collection: Collection<RoomAllocation> = data.db.collection("room_allocations");
+    let room_collection: Collection<Room> = data.db.collection("rooms");
+
+    // Check if student has an active room allocation
+    let allocation = allocation_collection
+        .find_one(doc! {
+            "student_id": &student_id,
+            "status": "active",
+            "campus_id": &claims.campus_id
+        }, None)
+        .await
+        .map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
+
+    match allocation {
+        Some(alloc) => {
+            // Get room details
+            let room_obj_id = ObjectId::parse_str(&alloc.room_id)
+                .map_err(|e| actix_web::error::ErrorBadRequest(e))?;
+
+            let room = room_collection
+                .find_one(doc! { "_id": room_obj_id }, None)
+                .await
+                .map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
+
+            Ok(HttpResponse::Ok().json(serde_json::json!({
+                "student_id": student_id,
+                "is_hosteller": true,
+                "hostel_name": alloc.hostel_name,
+                "room_number": alloc.room_number,
+                "allocation_date": alloc.allocation_date,
+                "room_type": room.map(|r| r.room_type).unwrap_or_default(),
+                "status": alloc.status
+            })))
+        }
+        None => {
+            Ok(HttpResponse::Ok().json(serde_json::json!({
+                "student_id": student_id,
+                "is_hosteller": false
+            })))
+        }
+    }
+}
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     dotenv::dotenv().ok();
@@ -368,6 +428,8 @@ async fn main() -> std::io::Result<()> {
             // Maintenance routes
             .route("/api/maintenance", web::post().to(create_maintenance_request))
             .route("/api/maintenance", web::get().to(get_maintenance_requests))
+            // Student Dashboard routes
+            .route("/api/student/hostel-status/{student_id}", web::get().to(get_student_hostel_status))
     })
     .bind(format!("127.0.0.1:{}", port))?
     .run()
