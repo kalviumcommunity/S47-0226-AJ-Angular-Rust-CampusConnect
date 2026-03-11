@@ -300,12 +300,56 @@ Example flows:
 
 ---
 
+## 🦀 Rust Memory Model Documentation
+
+This project includes comprehensive documentation on Rust's ownership, borrowing, and lifetimes:
+
+### 📚 Documentation Files
+
+* **[RUST_MEMORY_MODEL.md](RUST_MEMORY_MODEL.md)** - Complete guide to ownership, borrowing, and lifetimes
+* **[QUICK_REFERENCE.md](QUICK_REFERENCE.md)** - Quick reference for common patterns
+* **[examples/](examples/)** - Runnable code examples demonstrating each concept
+* **[VIDEO_DEMO_GUIDE.md](VIDEO_DEMO_GUIDE.md)** - Guide for creating video demonstrations
+* **[PR_CHECKLIST.md](PR_CHECKLIST.md)** - Assignment completion checklist
+
+### 🚀 Quick Start
+
+```bash
+cd examples
+rustc ownership_example.rs && ./ownership_example
+rustc borrowing_example.rs && ./borrowing_example
+rustc lifetime_example.rs && ./lifetime_example
+rustc backend_example.rs && ./backend_example
+```
+
+### 🎯 Key Concepts Covered
+
+* **Ownership**: One owner per value, automatic cleanup, move semantics
+* **Borrowing**: Immutable and mutable references, borrowing rules
+* **Lifetimes**: Reference validity, lifetime annotations, preventing dangling pointers
+* **Backend Applications**: How these concepts prevent bugs in Actix/Axum services
+
+### 💡 Why This Matters
+
+Rust's memory model prevents entire categories of bugs:
+- No null pointer exceptions
+- No memory leaks
+- No data races
+- No use-after-free vulnerabilities
+- No dangling references
+
+These guarantees make Rust ideal for building reliable, high-performance backend services.
+
+---
+
 ## 🎓 Learning Outcomes
 
 This project demonstrates:
 
 * Enterprise microservices architecture
 * Rust-based backend engineering
+* Rust's ownership, borrowing, and lifetime system
+* Memory-safe backend development
 * Angular enterprise frontend development
 * JWT authentication & middleware implementation
 * MongoDB document modeling
