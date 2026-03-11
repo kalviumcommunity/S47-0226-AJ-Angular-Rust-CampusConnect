@@ -4,6 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { AuthService } from '../services/auth.service';
 import { LibraryService } from '../services/library.service';
+import { OpenLibraryService, OpenLibraryBook } from '../services/open-library.service';
 
 @Component({
   selector: 'app-librarian-dashboard',
@@ -250,6 +251,203 @@ padding:10px;
 border-radius:8px;
 margin-bottom:14px;
 }
+
+/* OPEN LIBRARY SEARCH */
+
+.ol-search-bar{
+display:flex;
+gap:10px;
+margin-bottom:22px;
+}
+
+.ol-search-bar input{
+flex:1;
+padding:12px 16px;
+border-radius:10px;
+border:1.5px solid #d1d5db;
+font-size:15px;
+}
+
+.ol-search-bar button{
+padding:12px 24px;
+background:#2563eb;
+color:white;
+border:none;
+border-radius:10px;
+font-size:15px;
+cursor:pointer;
+white-space:nowrap;
+}
+
+.ol-search-bar button:disabled{
+background:#94a3b8;
+cursor:not-allowed;
+}
+
+.ol-books-grid{
+display:grid;
+grid-template-columns:repeat(auto-fill,minmax(200px,1fr));
+gap:18px;
+margin-top:10px;
+}
+
+.ol-book-card{
+background:white;
+border-radius:14px;
+overflow:hidden;
+box-shadow:0 3px 12px rgba(0,0,0,0.08);
+display:flex;
+flex-direction:column;
+transition:transform 0.15s,box-shadow 0.15s;
+}
+
+.ol-book-card:hover{
+transform:translateY(-3px);
+box-shadow:0 6px 20px rgba(0,0,0,0.12);
+}
+
+.ol-book-cover{
+width:100%;
+height:200px;
+object-fit:cover;
+background:#f1f5f9;
+}
+
+.ol-book-cover-placeholder{
+width:100%;
+height:200px;
+background:linear-gradient(135deg,#e2e8f0,#cbd5e1);
+display:flex;
+align-items:center;
+justify-content:center;
+font-size:40px;
+}
+
+.ol-book-info{
+padding:14px;
+flex:1;
+display:flex;
+flex-direction:column;
+}
+
+.ol-book-title{
+font-weight:700;
+font-size:14px;
+margin:0 0 4px;
+color:#1e293b;
+display:-webkit-box;
+-webkit-line-clamp:2;
+-webkit-box-orient:vertical;
+overflow:hidden;
+}
+
+.ol-book-author{
+font-size:12px;
+color:#64748b;
+margin:0 0 4px;
+}
+
+.ol-book-meta{
+font-size:11px;
+color:#94a3b8;
+margin:0 0 10px;
+}
+
+.ol-book-actions{
+display:flex;
+flex-direction:column;
+gap:6px;
+margin-top:auto;
+}
+
+.ol-book-actions button{
+padding:7px 10px;
+border:none;
+border-radius:7px;
+cursor:pointer;
+font-size:12px;
+font-weight:600;
+}
+
+.btn-add-lib{
+background:#2563eb;
+color:white;
+}
+
+.btn-lend-ol{
+background:#059669;
+color:white;
+}
+
+.btn-waitlist-ol{
+background:#7c3aed;
+color:white;
+}
+
+.ol-no-results{
+text-align:center;
+color:#94a3b8;
+padding:40px;
+font-size:15px;
+}
+
+.ol-quick-actions{
+background:white;
+border-radius:12px;
+padding:18px 22px;
+box-shadow:0 2px 10px rgba(0,0,0,0.06);
+margin-bottom:22px;
+}
+
+.ol-quick-actions h3{
+margin:0 0 12px;
+font-size:16px;
+}
+
+.ol-quick-chips{
+display:flex;
+flex-wrap:wrap;
+gap:8px;
+}
+
+.ol-chip{
+padding:6px 14px;
+background:#eff6ff;
+color:#2563eb;
+border:1px solid #bfdbfe;
+border-radius:20px;
+cursor:pointer;
+font-size:13px;
+transition:background 0.15s;
+}
+
+.ol-chip:hover{
+background:#dbeafe;
+}
+
+.ol-lend-modal-overlay{
+position:fixed;
+inset:0;
+background:rgba(0,0,0,0.45);
+z-index:1000;
+display:flex;
+align-items:center;
+justify-content:center;
+}
+
+.ol-lend-modal{
+background:white;
+border-radius:16px;
+padding:28px 32px;
+width:400px;
+max-width:95vw;
+box-shadow:0 20px 60px rgba(0,0,0,0.2);
+}
+
+.ol-lend-modal h3{
+margin:0 0 18px;
+font-size:18px;
+}
 `],
   template: `
     <div class="dashboard-layout">
@@ -283,6 +481,10 @@ margin-bottom:14px;
           </a>
           <a (click)="activeSection = 'addbook'" [class.active]="activeSection === 'addbook'">
             <span>Add Book</span>
+          </a>
+          <a (click)="activeSection = 'openlibrary'" [class.active]="activeSection === 'openlibrary'"
+             style="border-top: 1px solid rgba(255,255,255,0.12); margin-top: 4px; padding-top: 18px">
+            <span> Search Open Library</span>
           </a>
         </nav>
         <div class="sidebar-footer">
@@ -630,6 +832,128 @@ margin-bottom:14px;
             </form>
           </div>
         </section>
+
+        <!-- SEARCH OPEN LIBRARY -->
+        <section *ngIf="activeSection === 'openlibrary'">
+          <h1>Search Open Library</h1>
+          <p class="section-desc">
+            Powered by <strong>Open Library (openlibrary.org)</strong> — a free, open catalogue of millions of books.
+            Search by title, author, or ISBN. Add books directly to your campus library, lend to a student, or add to waitlist.
+          </p>
+
+          <!-- Quick chips -->
+          <div class="ol-quick-actions">
+            <h3>Quick Searches</h3>
+            <div class="ol-quick-chips">
+              <span class="ol-chip" *ngFor="let chip of olQuickChips" (click)="olRunChip(chip)">{{ chip }}</span>
+            </div>
+          </div>
+
+          <!-- Search bar -->
+          <div class="ol-search-bar">
+            <input
+              type="text"
+              [(ngModel)]="olQuery"
+              name="ol_query"
+              placeholder="Search by title, author, or ISBN…"
+              (keyup.enter)="olSearch()"
+            />
+            <button (click)="olSearch()" [disabled]="olLoading">
+              {{ olLoading ? 'Searching…' : 'Search' }}
+            </button>
+          </div>
+
+          <div *ngIf="olError" class="error-message">{{ olError }}</div>
+
+          <!-- Results -->
+          <div *ngIf="olResults.length > 0">
+            <p style="color:#64748b; font-size:13px; margin-bottom:12px">
+              Showing {{ olResults.length }} result(s) for "<strong>{{ olLastQuery }}</strong>"
+            </p>
+            <div class="ol-books-grid">
+              <div class="ol-book-card" *ngFor="let book of olResults">
+                <img *ngIf="book.coverUrl" [src]="book.coverUrl" [alt]="book.title" class="ol-book-cover"
+                     (error)="book.coverUrl = null" />
+                <div *ngIf="!book.coverUrl" class="ol-book-cover-placeholder">📚</div>
+                <div class="ol-book-info">
+                  <p class="ol-book-title">{{ book.title }}</p>
+                  <p class="ol-book-author">{{ book.authorName }}</p>
+                  <p class="ol-book-meta">
+                    {{ book.subject }}<span *ngIf="book.publishYear"> · {{ book.publishYear }}</span>
+                    <span *ngIf="book.isbn"><br/>ISBN: {{ book.isbn }}</span>
+                  </p>
+                  <div class="ol-book-actions">
+                    <button class="btn-add-lib" (click)="olAddToLibrary(book)" title="Add to campus library inventory">
+                      ➕ Add to Library
+                    </button>
+                    <button class="btn-lend-ol" (click)="olOpenLend(book)" title="Add to library and lend to a student">
+                      📖 Lend to Student
+                    </button>
+                    <button class="btn-waitlist-ol" (click)="olOpenWaitlist(book)" title="Add to library and put student on waitlist">
+                      ⏳ Add to Waitlist
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div *ngIf="!olLoading && olResults.length === 0 && olLastQuery" class="ol-no-results">
+            No results found for "{{ olLastQuery }}". Try a different search term.
+          </div>
+          <div *ngIf="!olLoading && !olLastQuery" class="ol-no-results">
+            Enter a search term to discover books from the Open Library catalogue.
+          </div>
+        </section>
+
+        <!-- OL LEND MODAL -->
+        <div class="ol-lend-modal-overlay" *ngIf="olLendModal.visible" (click)="olLendModal.visible = false">
+          <div class="ol-lend-modal" (click)="$event.stopPropagation()">
+            <h3>Lend "{{ olLendModal.book?.title }}"</h3>
+            <p style="font-size:13px;color:#64748b;margin-bottom:16px">
+              This will add the book to your library (if not present) and issue it to the student.
+            </p>
+            <div *ngIf="olLendModal.success" style="background:#e8f5e9;color:#2e7d32;padding:10px;border-radius:8px;margin-bottom:12px">{{ olLendModal.success }}</div>
+            <div *ngIf="olLendModal.error" class="error-message">{{ olLendModal.error }}</div>
+            <div class="form-group">
+              <label>Student ID</label>
+              <input type="text" [(ngModel)]="olLendModal.studentId" name="ol_lend_sid" placeholder="Enter student ID" />
+            </div>
+            <div class="form-group">
+              <label>Loan Duration (days)</label>
+              <input type="number" [(ngModel)]="olLendModal.days" name="ol_lend_days" min="1" max="30" />
+            </div>
+            <div style="display:flex;gap:10px;margin-top:16px">
+              <button class="btn btn-primary" (click)="olConfirmLend()" [disabled]="olLendModal.loading">
+                {{ olLendModal.loading ? 'Processing…' : 'Confirm Lend' }}
+              </button>
+              <button class="btn btn-secondary" (click)="olLendModal.visible = false">Cancel</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- OL WAITLIST MODAL -->
+        <div class="ol-lend-modal-overlay" *ngIf="olWaitlistModal.visible" (click)="olWaitlistModal.visible = false">
+          <div class="ol-lend-modal" (click)="$event.stopPropagation()">
+            <h3>Waitlist for "{{ olWaitlistModal.book?.title }}"</h3>
+            <p style="font-size:13px;color:#64748b;margin-bottom:16px">
+              This will add the book to your library (if not present) and place the student in the waiting list.
+            </p>
+            <div *ngIf="olWaitlistModal.success" style="background:#e8f5e9;color:#2e7d32;padding:10px;border-radius:8px;margin-bottom:12px">{{ olWaitlistModal.success }}</div>
+            <div *ngIf="olWaitlistModal.error" class="error-message">{{ olWaitlistModal.error }}</div>
+            <div class="form-group">
+              <label>Student ID</label>
+              <input type="text" [(ngModel)]="olWaitlistModal.studentId" name="ol_wl_sid" placeholder="Enter student ID" />
+            </div>
+            <div style="display:flex;gap:10px;margin-top:16px">
+              <button class="btn btn-primary" (click)="olConfirmWaitlist()" [disabled]="olWaitlistModal.loading">
+                {{ olWaitlistModal.loading ? 'Processing…' : 'Add to Waitlist' }}
+              </button>
+              <button class="btn btn-secondary" (click)="olWaitlistModal.visible = false">Cancel</button>
+            </div>
+          </div>
+        </div>
+
       </main>
     </div>
   `
@@ -664,9 +988,39 @@ export class LibrarianDashboardComponent implements OnInit {
   waitlistSuccess = '';
   waitlistError = '';
 
+  // Open Library search
+  olQuery = '';
+  olLastQuery = '';
+  olResults: OpenLibraryBook[] = [];
+  olLoading = false;
+  olError = '';
+  olQuickChips = ['Computer Science', 'Data Structures', 'Machine Learning', 'Physics', 'Chemistry', 'History', 'Mathematics', 'Economics', 'Literature'];
+
+  olLendModal: {
+    visible: boolean;
+    book: OpenLibraryBook | null;
+    bookId: string;
+    studentId: string;
+    days: number;
+    loading: boolean;
+    success: string;
+    error: string;
+  } = { visible: false, book: null, bookId: '', studentId: '', days: 7, loading: false, success: '', error: '' };
+
+  olWaitlistModal: {
+    visible: boolean;
+    book: OpenLibraryBook | null;
+    bookId: string;
+    studentId: string;
+    loading: boolean;
+    success: string;
+    error: string;
+  } = { visible: false, book: null, bookId: '', studentId: '', loading: false, success: '', error: '' };
+
   constructor(
     private authService: AuthService,
     private libraryService: LibraryService,
+    private openLibraryService: OpenLibraryService,
     private router: Router
   ) {}
 
@@ -774,6 +1128,182 @@ export class LibrarianDashboardComponent implements OnInit {
     this.libraryService.updateWaitlistStatus(entryId, status).subscribe({
       next: () => this.loadAll(),
       error: () => {}
+    });
+  }
+
+  // ===== Open Library =====
+
+  olSearch(): void {
+    const q = this.olQuery.trim();
+    if (!q) return;
+    this.olLoading = true;
+    this.olError = '';
+    this.olResults = [];
+    this.olLastQuery = q;
+    this.openLibraryService.searchBooks(q).subscribe({
+      next: (books: OpenLibraryBook[]) => {
+        this.olResults = books;
+        this.olLoading = false;
+      },
+      error: () => {
+        this.olError = 'Failed to reach Open Library. Check your internet connection and try again.';
+        this.olLoading = false;
+      }
+    });
+  }
+
+  olRunChip(chip: string): void {
+    this.olQuery = chip;
+    this.olSearch();
+  }
+
+  /** Add a book from Open Library directly into the campus library with 1 copy */
+  olAddToLibrary(book: OpenLibraryBook): void {
+    const payload = {
+      isbn: book.isbn || 'N/A',
+      title: book.title,
+      author: book.authorName,
+      category: book.subject,
+      total_copies: 1,
+    };
+    this.libraryService.addBook(payload).subscribe({
+      next: () => {
+        alert(`"${book.title}" added to library!`);
+        this.loadAll();
+      },
+      error: (err: any) => alert(err.error?.error || 'Failed to add book.')
+    });
+  }
+
+  /** Open the lend modal for an Open Library book */
+  olOpenLend(book: OpenLibraryBook): void {
+    this.olLendModal = { visible: true, book, bookId: '', studentId: '', days: 7, loading: false, success: '', error: '' };
+  }
+
+  /** Add book to library (if needed) then lend it */
+  olConfirmLend(): void {
+    if (!this.olLendModal.studentId.trim()) {
+      this.olLendModal.error = 'Please enter a student ID.';
+      return;
+    }
+    this.olLendModal.loading = true;
+    this.olLendModal.error = '';
+
+    const book = this.olLendModal.book!;
+
+    // Step 1: Add book to library (ignore duplicate errors), Step 2: refresh books, Step 3: issue
+    const payload = {
+      isbn: book.isbn || 'N/A',
+      title: book.title,
+      author: book.authorName,
+      category: book.subject,
+      total_copies: 1,
+    };
+
+    this.libraryService.addBook(payload).subscribe({
+      next: () => this._issueAfterAdd(),
+      error: () => this._issueAfterAdd() // book may already exist, proceed anyway
+    });
+  }
+
+  private _issueAfterAdd(): void {
+    // Refresh book list to find the newly added book by title
+    this.libraryService.getBooks().subscribe({
+      next: (books: any[]) => {
+        this.allBooks = books || [];
+        const title = this.olLendModal.book?.title || '';
+        const matched = this.allBooks.find((b: any) =>
+          b.title?.toLowerCase() === title.toLowerCase() && b.available_copies > 0
+        );
+        if (!matched) {
+          this.olLendModal.error = 'Book has no available copies. Try adding it to the waitlist instead.';
+          this.olLendModal.loading = false;
+          return;
+        }
+        this.libraryService.issueBook({
+          book_id: matched._id,
+          student_id: this.olLendModal.studentId,
+          days: this.olLendModal.days,
+        }).subscribe({
+          next: (res: any) => {
+            this.olLendModal.success = `Issued! Due: ${new Date(res.due_date).toLocaleDateString()}`;
+            this.olLendModal.loading = false;
+            this.loadAll();
+          },
+          error: (err: any) => {
+            this.olLendModal.error = err.error?.error || 'Failed to issue book.';
+            this.olLendModal.loading = false;
+          }
+        });
+      },
+      error: () => {
+        this.olLendModal.error = 'Could not refresh book list.';
+        this.olLendModal.loading = false;
+      }
+    });
+  }
+
+  /** Open the waitlist modal for an Open Library book */
+  olOpenWaitlist(book: OpenLibraryBook): void {
+    this.olWaitlistModal = { visible: true, book, bookId: '', studentId: '', loading: false, success: '', error: '' };
+  }
+
+  /** Add book to library (if needed) then add student to waitlist */
+  olConfirmWaitlist(): void {
+    if (!this.olWaitlistModal.studentId.trim()) {
+      this.olWaitlistModal.error = 'Please enter a student ID.';
+      return;
+    }
+    this.olWaitlistModal.loading = true;
+    this.olWaitlistModal.error = '';
+
+    const book = this.olWaitlistModal.book!;
+    const payload = {
+      isbn: book.isbn || 'N/A',
+      title: book.title,
+      author: book.authorName,
+      category: book.subject,
+      total_copies: 1,
+    };
+
+    this.libraryService.addBook(payload).subscribe({
+      next: () => this._waitlistAfterAdd(),
+      error: () => this._waitlistAfterAdd()
+    });
+  }
+
+  private _waitlistAfterAdd(): void {
+    this.libraryService.getBooks().subscribe({
+      next: (books: any[]) => {
+        this.allBooks = books || [];
+        const title = this.olWaitlistModal.book?.title || '';
+        const matched = this.allBooks.find((b: any) =>
+          b.title?.toLowerCase() === title.toLowerCase()
+        );
+        if (!matched) {
+          this.olWaitlistModal.error = 'Could not find book in library.';
+          this.olWaitlistModal.loading = false;
+          return;
+        }
+        this.libraryService.addToWaitlist({
+          book_id: matched._id,
+          student_id: this.olWaitlistModal.studentId,
+        }).subscribe({
+          next: () => {
+            this.olWaitlistModal.success = 'Student added to waiting list!';
+            this.olWaitlistModal.loading = false;
+            this.loadAll();
+          },
+          error: (err: any) => {
+            this.olWaitlistModal.error = err.error?.error || 'Failed to add to waitlist.';
+            this.olWaitlistModal.loading = false;
+          }
+        });
+      },
+      error: () => {
+        this.olWaitlistModal.error = 'Could not refresh book list.';
+        this.olWaitlistModal.loading = false;
+      }
     });
   }
 
