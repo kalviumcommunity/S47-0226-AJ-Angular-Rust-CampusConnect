@@ -6,6 +6,7 @@ import { TeacherDashboardComponent } from './teacher/teacher-dashboard.component
 import { HrDashboardComponent } from './hr/hr-dashboard.component';
 import { LibrarianDashboardComponent } from './librarian/librarian-dashboard.component';
 import { authGuard } from './guards/auth.guard';
+import { BindingDemoComponent } from './binding-demo/binding-demo.component';
 
 export const routes: Routes = [
   { path: '', redirectTo: '/login', pathMatch: 'full' },
@@ -35,5 +36,6 @@ export const routes: Routes = [
     canActivate: [authGuard],
     data: { role: 'librarian' }
   },
+  { path: 'binding-demo', component: BindingDemoComponent },
   { path: '**', redirectTo: '/login' }
 ];
