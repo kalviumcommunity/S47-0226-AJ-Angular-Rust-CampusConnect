@@ -7,6 +7,8 @@ import { HrDashboardComponent } from './hr/hr-dashboard.component';
 import { LibrarianDashboardComponent } from './librarian/librarian-dashboard.component';
 import { authGuard } from './guards/auth.guard';
 import { BindingDemoComponent } from './binding-demo/binding-demo.component';
+import { ProfileFormComponent } from './forms/profile-form.component';
+import { EnrollmentFormComponent } from './forms/enrollment-form.component';
 
 export const routes: Routes = [
   { path: '', redirectTo: '/login', pathMatch: 'full' },
@@ -37,5 +39,8 @@ export const routes: Routes = [
     data: { role: 'librarian' }
   },
   { path: 'binding-demo', component: BindingDemoComponent },
+  // Form demos (Part 1 assignment)
+  { path: 'forms/template', component: ProfileFormComponent },
+  { path: 'forms/reactive', component: EnrollmentFormComponent },
   { path: '**', redirectTo: '/login' }
 ];
