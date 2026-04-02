@@ -1,9 +1,17 @@
 # Angular Forms — Assignment PR Documentation
 
+## Overview
+
+This PR demonstrates validated Angular forms with user-friendly, field-level error handling across four components. Two approaches are used: **Reactive Forms** (primary) and **Template-Driven Forms** (secondary demo).
+
+---
+
 ## Routes
 
 | URL | Component | Approach |
 |-----|-----------|----------|
+| `/login` | `LoginComponent` | Reactive |
+| `/register` | `RegisterComponent` | Reactive |
 | `/forms/template` | `ProfileFormComponent` | Template-Driven |
 | `/forms/reactive` | `EnrollmentFormComponent` | Reactive |
 
@@ -11,50 +19,160 @@
 
 ## 1. Which form approach and why?
 
-Both approaches are demonstrated in separate components so the differences are clear side-by-side.
+### Reactive Forms — used in `LoginComponent`, `RegisterComponent`, `EnrollmentFormComponent`
 
-**Template-Driven** (`ProfileFormComponent`) — chosen for the profile update form because:
-- The form is simple and the logic lives naturally in the template via `ngModel`.
-- Angular's `NgForm` directive automatically tracks state (valid/invalid/dirty/pristine/touched) without any extra code.
-- Good fit for forms where the structure is unlikely to change at runtime.
+Reactive Forms were chosen as the primary approach because:
+- Validation logic lives in the component class, not scattered across the template — easier to read, test, and maintain.
+- `FormGroup` / `FormControl` give direct, synchronous access to validity state (`form.valid`, `ctrl.errors`, `form.markAllAsTouched()`).
+- Custom validators are plain functions with no template magic needed.
+- `form.markAllAsTouched()` lets us surface all errors at once on a failed submit attempt with a single call.
 
-**Reactive** (`EnrollmentFormComponent`) — chosen for the enrollment form because:
-- Form structure is defined explicitly in the component class (`FormGroup` / `FormControl`), making it easy to unit-test.
-- Custom validators (e.g. `noWhitespaceOnlyValidator`) are plain functions — no template magic needed.
-- `form.value`, `form.valid`, `form.markAllAsTouched()` are all directly accessible in the class.
-- Better for complex, dynamic forms where fields may be added/removed at runtime.
+### Template-Driven Forms — used in `ProfileFormComponent`
+
+Template-Driven was used for the profile form to demonstrate the contrast:
+- Validation attributes (`required`, `minlength`, `email`, `pattern`) are declared directly on inputs.
+- Angular's `NgForm` directive auto-tracks state via `#profileForm="ngForm"` template reference.
+- Simpler for small, static forms where runtime control isn't needed.
 
 ---
 
-## 2. How validation is implemented
+## 2. Validation rules per field
 
-### Template-Driven (`ProfileFormComponent`)
-Validation is declared directly on the input elements using HTML5 attributes that Angular understands:
+### `LoginComponent` (Reactive)
+
+| Field | Rules |
+|-------|-------|
+| `username` | `required`, `minLength(3)` |
+| `password` | `required`, `minLength(6)` |
+
+### `RegisterComponent` (Reactive)
+
+| Field | Rules |
+|-------|-------|
+| `full_name` | `required`, `minLength(3)` |
+| `email` | `required`, `email` (format check) |
+| `username` | `required`, `minLength(3)`, `pattern(/^\w+$/)` — letters/digits/underscores only |
+| `password` | `required`, `minLength(6)`, custom `hasDigitValidator` — must contain at least one digit |
+| `role` | `required` |
+| `campus_id` | `required`, `pattern(/^[A-Za-z0-9]{4,20}$/)` — alphanumeric, 4–20 chars |
+
+### `EnrollmentFormComponent` (Reactive)
+
+| Field | Rules |
+|-------|-------|
+| `studentId` | `required`, `pattern(/^STU-\d{4}-\d{3}$/)` |
+| `studentName` | `required`, `minLength(3)` |
+| `studentEmail` | `required`, `email` |
+| `course` | `required` |
+| `semester` | `required`, `min(1)`, `max(8)` |
+| `reason` | `required`, `minLength(20)`, custom `noWhitespaceOnlyValidator` |
+
+### `ProfileFormComponent` (Template-Driven)
+
+| Field | Rules |
+|-------|-------|
+| `fullName` | `required`, `minlength="3"` |
+| `email` | `required`, `email` |
+| `phone` | `required`, `pattern="^[0-9]{10,15}$"` |
+| `bio` | `maxlength="200"` (optional) |
+
+---
+
+## 3. How Angular tracks form validity and state
+
+### Reactive Forms
+
+`FormGroup` holds a tree of `FormControl` instances. Angular's `ReactiveFormsModule` binds the DOM to the model via `[formGroup]` and `formControlName` directives. State updates happen synchronously on every keystroke:
+
+```ts
+// Define controls with validators in the class
+form = new FormGroup({
+  email: new FormControl('', [Validators.required, Validators.email]),
+  password: new FormControl('', [Validators.required, Validators.minLength(6)])
+});
+
+// Helper used in the template
+isInvalid(name: string): boolean {
+  const c = this.form.get(name)!;
+  return c.invalid && c.touched;  // only show errors after user interaction
+}
+
+// On submit: block invalid forms, surface all errors at once
+onLogin(): void {
+  if (this.form.invalid) {
+    this.form.markAllAsTouched();
+    return;
+  }
+  // proceed with submission...
+}
+```
+
+In the template, errors are shown conditionally — only after the field has been touched:
 
 ```html
-<input name="email" type="email" [(ngModel)]="model.email" #email="ngModel"
-       required email />
-<div *ngIf="email.invalid && email.touched">
-  <span *ngIf="email.errors?.['required']">Email is required.</span>
-  <span *ngIf="email.errors?.['email']">Enter a valid email address.</span>
+<input formControlName="email" [class.input-error]="isInvalid('email')" />
+<div class="error-hints" *ngIf="isInvalid('email')">
+  <span *ngIf="ctrl('email').errors?.['required']">Email is required.</span>
+  <span *ngIf="ctrl('email').errors?.['email']">Enter a valid email address.</span>
 </div>
 ```
 
-Validators used: `required`, `minlength`, `email`, `pattern` (regex for phone).
+Angular also applies CSS classes automatically: `ng-valid` / `ng-invalid`, `ng-touched` / `ng-untouched`, `ng-dirty` / `ng-pristine`.
 
-### Reactive (`EnrollmentFormComponent`)
-Validators are passed as an array to `FormControl` in the component class:
+### Template-Driven Forms
 
-```ts
-studentEmail: new FormControl('', [Validators.required, Validators.email]),
-reason: new FormControl('', [
-  Validators.required,
-  Validators.minLength(20),
-  noWhitespaceOnlyValidator   // custom validator
-])
+Angular wraps the `<form>` with `NgForm` automatically when `FormsModule` is imported. Each `[(ngModel)]` input registers itself as a child control. The template reference `#profileForm="ngForm"` exposes the aggregate state:
+
+```html
+<form #profileForm="ngForm" (ngSubmit)="onSubmit(profileForm)" novalidate>
+  <input name="email" type="email" [(ngModel)]="model.email" #email="ngModel"
+         required email [class.input-error]="email.invalid && email.touched" />
+  <div *ngIf="email.invalid && email.touched">
+    <span *ngIf="email.errors?.['required']">Email is required.</span>
+    <span *ngIf="email.errors?.['email']">Enter a valid email address.</span>
+  </div>
+</form>
 ```
 
-A custom validator is a plain function:
+The live state badges in `ProfileFormComponent` read `profileForm.valid`, `profileForm.dirty`, and `profileForm.touched` directly.
+
+---
+
+## 4. Safe form submission
+
+All forms follow the same pattern:
+
+1. The submit button is **not** disabled by default (to allow `markAllAsTouched` to fire on click).
+2. Inside `onSubmit()`, if `form.invalid`, call `form.markAllAsTouched()` and return early — this makes all error messages visible at once.
+3. Only when `form.valid` does the HTTP call proceed.
+
+```ts
+onLogin(): void {
+  if (this.form.invalid) {
+    this.form.markAllAsTouched(); // surfaces all errors immediately
+    return;
+  }
+  // safe to submit
+}
+```
+
+> Exception: the demo form buttons in `ProfileFormComponent` and `EnrollmentFormComponent` use `[disabled]="form.invalid"` to visually reinforce the invalid state for demo purposes.
+
+---
+
+## 5. Custom Validators
+
+### `hasDigitValidator` (RegisterComponent)
+Ensures the password contains at least one numeric digit:
+
+```ts
+function hasDigitValidator(control: AbstractControl): ValidationErrors | null {
+  return /\d/.test(control.value ?? '') ? null : { hasDigit: true };
+}
+```
+
+### `noWhitespaceOnlyValidator` (EnrollmentFormComponent)
+Rejects strings that are entirely whitespace:
 
 ```ts
 function noWhitespaceOnlyValidator(control: AbstractControl): ValidationErrors | null {
@@ -65,36 +183,20 @@ function noWhitespaceOnlyValidator(control: AbstractControl): ValidationErrors |
 }
 ```
 
-Errors are surfaced in the template via `ctrl('reason').errors?.['noWhitespaceOnly']`.
-
----
-
-## 3. How Angular tracks and updates form state
-
-### Template-Driven
-Angular wraps the `<form>` element with an `NgForm` directive automatically when `FormsModule` is imported. Each `ngModel` input registers itself as a child control. Angular then:
-- Sets CSS classes (`ng-valid`, `ng-invalid`, `ng-dirty`, `ng-touched`) on every control and the form itself.
-- Exposes the aggregate state via the `#profileForm="ngForm"` template reference variable.
-- Re-evaluates validity on every `input` event (change detection cycle).
-
-The live state badges in the UI read directly from `profileForm.valid`, `profileForm.dirty`, `profileForm.touched`.
-
-### Reactive
-The `FormGroup` holds references to all `FormControl` instances. Angular's `ReactiveFormsModule` directive `[formGroup]` binds the DOM to the model. State updates happen:
-- Synchronously on every keystroke via the control's `valueChanges` observable.
-- The `<details>` live preview block renders `form.value | json` on every change detection cycle, showing the current value in real time.
-- `form.markAllAsTouched()` is called on a failed submit attempt so all error messages appear at once.
-
 ---
 
 ## Screenshots
 
-> Run `ng serve` from `campus-connect-frontend/`, then visit:
-> - http://localhost:4200/forms/template
-> - http://localhost:4200/forms/reactive
+> Run `ng serve` from `campus-connect-frontend/`, then visit the routes listed above.
 
-### Template-Driven Form — invalid state
-State badges show `✗ Invalid / Pristine / Untouched` on load. Errors appear per-field after the user touches and leaves each input.
+### Login — validation errors on empty submit
+Clicking "Sign In" with empty fields calls `markAllAsTouched()`, revealing red-bordered inputs and inline error messages: "Username is required." and "Password is required."
 
-### Reactive Form — live value preview
-The collapsible `<details>` block updates `form.value` in real time as the user types, demonstrating reactive state tracking.
+### Register — all fields touched on failed submit
+Clicking "Create Account" with an invalid form surfaces errors for every field simultaneously. The password field shows both the minlength error and the custom "must contain at least one number" message when applicable.
+
+### Template-Driven Profile Form — per-field errors after blur
+State badges update live (Valid/Invalid, Pristine/Dirty, Untouched/Touched). Errors appear field-by-field as the user tabs through inputs.
+
+### Reactive Enrollment Form — live value preview
+The collapsible `<details>` block shows `form.value | json` updating in real time. The "Enroll Now" button stays disabled until all validators pass.
