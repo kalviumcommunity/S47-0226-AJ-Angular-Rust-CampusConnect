@@ -1,16 +1,18 @@
 import { Component, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { Router, RouterLink } from '@angular/router';
 import { AuthService } from '../services/auth.service';
 import { AcademicsService } from '../services/academics.service';
 import { FinanceService } from '../services/finance.service';
 import { LibraryService } from '../services/library.service';
 import { HostelService } from '../services/hostel.service';
+import { NavigationService } from '../services/navigation.service';
 
 @Component({
   selector: 'app-student-dashboard',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, RouterLink],
   template: `
     <div class="app-layout">
       <!-- Sidebar -->
@@ -20,27 +22,35 @@ import { HostelService } from '../services/hostel.service';
           <span>Student Portal</span>
         </div>
         <nav class="sidebar-nav">
-          <div class="nav-item" [class.active]="activeSection === 'overview'" (click)="activeSection = 'overview'">
+          <div class="nav-item" [class.active]="activeSection === 'overview'" (click)="setSection('overview')">
             <i class="fas fa-th-large"></i> Overview
           </div>
-          <div class="nav-item" [class.active]="activeSection === 'fees'" (click)="activeSection = 'fees'">
+          <div class="nav-item" [class.active]="activeSection === 'fees'" (click)="setSection('fees')">
             <i class="fas fa-money-bill-wave"></i> Fees
           </div>
-          <div class="nav-item" [class.active]="activeSection === 'library'" (click)="activeSection = 'library'">
+          <div class="nav-item" [class.active]="activeSection === 'library'" (click)="setSection('library')">
             <i class="fas fa-book"></i> Library
           </div>
-          <div class="nav-item" [class.active]="activeSection === 'attendance'" (click)="activeSection = 'attendance'">
+          <div class="nav-item" [class.active]="activeSection === 'attendance'" (click)="setSection('attendance')">
             <i class="fas fa-calendar-check"></i> Attendance
           </div>
-          <div class="nav-item" [class.active]="activeSection === 'notes'" (click)="activeSection = 'notes'">
+          <div class="nav-item" [class.active]="activeSection === 'notes'" (click)="setSection('notes')">
             <i class="fas fa-sticky-note"></i> Notes & Materials
           </div>
-          <div class="nav-item" [class.active]="activeSection === 'results'" (click)="activeSection = 'results'">
+          <div class="nav-item" [class.active]="activeSection === 'results'" (click)="setSection('results')">
             <i class="fas fa-trophy"></i> Results
           </div>
-          <div class="nav-item" [class.active]="activeSection === 'classes'" (click)="activeSection = 'classes'">
+          <div class="nav-item" [class.active]="activeSection === 'classes'" (click)="setSection('classes')">
             <i class="fas fa-chalkboard"></i> Classes
           </div>
+          <div class="nav-divider"></div>
+          <!-- routerLink navigation — no plain href -->
+          <a class="nav-item" routerLink="/home">
+            <i class="fas fa-home"></i> Home
+          </a>
+          <a class="nav-item" [routerLink]="['/profile', user?.username]">
+            <i class="fas fa-user"></i> My Profile
+          </a>
         </nav>
       </aside>
 
@@ -52,6 +62,10 @@ import { HostelService } from '../services/hostel.service';
           <div class="topbar-right">
             <span>{{ user?.full_name }}</span>
             <div class="user-avatar">{{ getInitials() }}</div>
+            <!-- Programmatic navigation to profile using Router service -->
+            <button class="btn btn-outline btn-sm" (click)="goToProfile()">
+              <i class="fas fa-user"></i> Profile
+            </button>
             <button class="btn btn-outline btn-sm" (click)="logout()">
               <i class="fas fa-sign-out-alt"></i> Logout
             </button>
@@ -69,7 +83,7 @@ import { HostelService } from '../services/hostel.service';
 
           <div class="dashboard-grid">
             <!-- Fees Summary Card -->
-            <div class="card" (click)="activeSection = 'fees'" style="cursor: pointer;">
+            <div class="card" (click)="setSection('fees')" style="cursor: pointer;">
               <div class="card-header">
                 <h3>Fees Status</h3>
                 <div class="icon icon-green"><i class="fas fa-money-bill-wave"></i></div>
@@ -89,7 +103,7 @@ import { HostelService } from '../services/hostel.service';
             </div>
 
             <!-- Attendance Summary Card -->
-            <div class="card" (click)="activeSection = 'attendance'" style="cursor: pointer;">
+            <div class="card" (click)="setSection('attendance')" style="cursor: pointer;">
               <div class="card-header">
                 <h3>Attendance</h3>
                 <div class="icon icon-blue"><i class="fas fa-calendar-check"></i></div>
@@ -111,7 +125,7 @@ import { HostelService } from '../services/hostel.service';
             </div>
 
             <!-- Library Summary Card -->
-            <div class="card" (click)="activeSection = 'library'" style="cursor: pointer;">
+            <div class="card" (click)="setSection('library')" style="cursor: pointer;">
               <div class="card-header">
                 <h3>Library</h3>
                 <div class="icon icon-orange"><i class="fas fa-book"></i></div>
@@ -127,7 +141,7 @@ import { HostelService } from '../services/hostel.service';
             </div>
 
             <!-- Results Summary Card -->
-            <div class="card" (click)="activeSection = 'results'" style="cursor: pointer;">
+            <div class="card" (click)="setSection('results')" style="cursor: pointer;">
               <div class="card-header">
                 <h3>Academic Results</h3>
                 <div class="icon icon-purple"><i class="fas fa-trophy"></i></div>
@@ -594,7 +608,9 @@ export class StudentDashboardComponent implements OnInit {
     private academicsService: AcademicsService,
     private financeService: FinanceService,
     private libraryService: LibraryService,
-    private hostelService: HostelService
+    private hostelService: HostelService,
+    private router: Router,
+    private navService: NavigationService
   ) {}
 
   ngOnInit(): void {
@@ -602,6 +618,19 @@ export class StudentDashboardComponent implements OnInit {
     if (this.user) {
       this.loadAllData();
     }
+    this.navService.setLastVisited('/student');
+    this.navService.addBreadcrumb('Student Dashboard');
+  }
+
+  /** Updates active section and persists it in NavigationService */
+  setSection(section: string): void {
+    this.activeSection = section;
+    this.navService.setActiveSection(section);
+  }
+
+  /** Programmatic navigation to profile page using Router service */
+  goToProfile(): void {
+    this.router.navigate(['/profile', this.user?.username]);
   }
 
   loadAllData(): void {

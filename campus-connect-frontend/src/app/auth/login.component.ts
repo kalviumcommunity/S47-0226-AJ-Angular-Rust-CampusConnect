@@ -72,6 +72,8 @@ import { AuthService } from '../services/auth.service';
         <p style="text-align:center; margin-top:20px; font-size:14px; color:#666;">
           Don't have an account?
           <a routerLink="/register" style="color:#1976d2; font-weight:500;">Register</a>
+          &nbsp;|&nbsp;
+          <a routerLink="/home" style="color:#1976d2; font-weight:500;">Home</a>
         </p>
       </div>
     </div>
