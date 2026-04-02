@@ -9,11 +9,27 @@ import { authGuard } from './guards/auth.guard';
 import { BindingDemoComponent } from './binding-demo/binding-demo.component';
 import { ProfileFormComponent } from './forms/profile-form.component';
 import { EnrollmentFormComponent } from './forms/enrollment-form.component';
+import { HomeComponent } from './home/home.component';
+import { ProfileComponent } from './profile/profile.component';
 
 export const routes: Routes = [
-  { path: '', redirectTo: '/login', pathMatch: 'full' },
+  // Default redirect to home
+  { path: '', redirectTo: '/home', pathMatch: 'full' },
+
+  // Public routes
+  { path: 'home', component: HomeComponent },
   { path: 'login', component: LoginComponent },
   { path: 'register', component: RegisterComponent },
+
+  // Profile route — uses route parameter :username
+  // Supports query param ?tab=info|activity|settings
+  {
+    path: 'profile/:username',
+    component: ProfileComponent,
+    canActivate: [authGuard]
+  },
+
+  // Role-based dashboard routes (protected)
   {
     path: 'student',
     component: StudentDashboardComponent,
@@ -38,9 +54,12 @@ export const routes: Routes = [
     canActivate: [authGuard],
     data: { role: 'librarian' }
   },
+
+  // Demo routes
   { path: 'binding-demo', component: BindingDemoComponent },
-  // Form demos (Part 1 assignment)
   { path: 'forms/template', component: ProfileFormComponent },
   { path: 'forms/reactive', component: EnrollmentFormComponent },
-  { path: '**', redirectTo: '/login' }
+
+  // Fallback
+  { path: '**', redirectTo: '/home' }
 ];

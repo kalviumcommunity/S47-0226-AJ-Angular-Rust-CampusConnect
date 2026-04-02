@@ -497,3 +497,30 @@ table td {
 .empty-state p {
   font-size: 14px;
 }
+
+/* ===== Router Navigation Additions ===== */
+
+/* Allow anchor tags to inherit nav-item styles (routerLink on <a>) */
+a.nav-item {
+  text-decoration: none;
+  display: flex;
+  align-items: center;
+  padding: 12px 24px;
+  color: rgba(255,255,255,0.7);
+  cursor: pointer;
+  transition: all 0.2s;
+  font-size: 14px;
+  gap: 12px;
+}
+
+a.nav-item:hover {
+  background: rgba(255,255,255,0.1);
+  color: white;
+}
+
+/* Divider between nav sections */
+.nav-divider {
+  height: 1px;
+  background: rgba(255,255,255,0.1);
+  margin: 8px 16px;
+}

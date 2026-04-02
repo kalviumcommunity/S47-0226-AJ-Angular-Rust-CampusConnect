@@ -1,13 +1,15 @@
 import { Component, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { Router, RouterLink } from '@angular/router';
 import { AuthService } from '../services/auth.service';
 import { AcademicsService } from '../services/academics.service';
+import { NavigationService } from '../services/navigation.service';
 
 @Component({
   selector: 'app-teacher-dashboard',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, RouterLink],
   template: `
     <div class="app-layout">
       <!-- Sidebar -->
@@ -35,6 +37,13 @@ import { AcademicsService } from '../services/academics.service';
           <div class="nav-item" [class.active]="activeSection === 'results'" (click)="activeSection = 'results'">
             <i class="fas fa-trophy"></i> Manage Results
           </div>
+          <div class="nav-divider"></div>
+          <a class="nav-item" routerLink="/home">
+            <i class="fas fa-home"></i> Home
+          </a>
+          <a class="nav-item" [routerLink]="['/profile', user?.username]">
+            <i class="fas fa-user"></i> My Profile
+          </a>
         </nav>
       </aside>
 
@@ -45,6 +54,9 @@ import { AcademicsService } from '../services/academics.service';
           <div class="topbar-right">
             <span>{{ user?.full_name }}</span>
             <div class="user-avatar">{{ getInitials() }}</div>
+            <button class="btn btn-outline btn-sm" (click)="goToProfile()">
+              <i class="fas fa-user"></i> Profile
+            </button>
             <button class="btn btn-outline btn-sm" (click)="logout()">
               <i class="fas fa-sign-out-alt"></i> Logout
             </button>
@@ -537,12 +549,21 @@ export class TeacherDashboardComponent implements OnInit {
 
   constructor(
     private authService: AuthService,
-    private academicsService: AcademicsService
+    private academicsService: AcademicsService,
+    private router: Router,
+    private navService: NavigationService
   ) {}
 
   ngOnInit(): void {
     this.user = this.authService.getUser();
     this.loadAllData();
+    this.navService.setLastVisited('/teacher');
+    this.navService.addBreadcrumb('Teacher Dashboard');
+  }
+
+  /** Programmatic navigation to profile using Router service */
+  goToProfile(): void {
+    this.router.navigate(['/profile', this.user?.username]);
   }
 
   loadAllData(): void {
