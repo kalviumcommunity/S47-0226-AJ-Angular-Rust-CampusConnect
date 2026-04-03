@@ -1,6 +1,6 @@
 use actix_web::{web, App, HttpServer, HttpResponse, HttpRequest, ResponseError};
 use actix_cors::Cors;
-use mongodb::{Client, Collection, bson::{doc, oid::ObjectId}};
+use mongodb::{Client, Collection, bson::{doc, oid::ObjectId}, options::FindOptions};
 use serde::{Deserialize, Serialize};
 use jsonwebtoken::{decode, DecodingKey, Validation, Algorithm};
 use chrono::{DateTime, Utc};
@@ -248,6 +248,60 @@ struct AppState {
     jwt_secret: String,
 }
 
+// ── Pagination & Filter Query Params ─────────────────────────────────────────
+
+/// Shared pagination params: ?page=1&limit=20
+#[derive(Debug, Deserialize)]
+struct PaginationParams {
+    page: Option<u64>,
+    limit: Option<u64>,
+}
+
+impl PaginationParams {
+    fn page(&self) -> u64 {
+        self.page.unwrap_or(1).max(1)
+    }
+    fn limit(&self) -> u64 {
+        self.limit.unwrap_or(20).clamp(1, 100)
+    }
+    fn skip(&self) -> u64 {
+        (self.page() - 1) * self.limit()
+    }
+}
+
+/// Filter params for GET /api/attendance
+#[derive(Debug, Deserialize)]
+struct AttendanceFilter {
+    page: Option<u64>,
+    limit: Option<u64>,
+    /// Filter by attendance status: present | absent | late
+    status: Option<String>,
+    /// Filter by course code
+    course_code: Option<String>,
+    /// Filter by student id
+    student_id: Option<String>,
+}
+
+/// Filter params for GET /api/enrollments
+#[derive(Debug, Deserialize)]
+struct EnrollmentFilter {
+    page: Option<u64>,
+    limit: Option<u64>,
+    /// Filter by semester, e.g. "Fall 2024"
+    semester: Option<String>,
+    /// Filter by course code
+    course_code: Option<String>,
+}
+
+/// Filter params for GET /api/courses
+#[derive(Debug, Deserialize)]
+struct CourseFilter {
+    page: Option<u64>,
+    limit: Option<u64>,
+    /// Filter by department name
+    department: Option<String>,
+}
+
 // ── Input Validation Helpers ──────────────────────────────────────────────────
 
 fn require_field<'a>(value: &'a Option<String>, field: &str) -> Result<&'a str, AppError> {
@@ -416,12 +470,33 @@ async fn create_course(
 async fn get_courses(
     data: web::Data<AppState>,
     req: HttpRequest,
+    query: web::Query<CourseFilter>,
 ) -> Result<HttpResponse, AppError> {
     let claims = extract_claims(&req, &data.jwt_secret)?;
     let collection: Collection<Course> = data.db.collection("courses");
 
+    // Build filter — always scope to campus_id, optionally filter by department
+    let mut filter = doc! { "campus_id": &claims.campus_id };
+    if let Some(dept) = &query.department {
+        if !dept.trim().is_empty() {
+            filter.insert("department", dept.as_str());
+        }
+    }
+
+    let pagination = PaginationParams { page: query.page, limit: query.limit };
+    let total = collection
+        .count_documents(filter.clone(), None)
+        .await
+        .context("Failed to count courses")?;
+
+    let options = FindOptions::builder()
+        .skip(pagination.skip())
+        .limit(pagination.limit() as i64)
+        .sort(doc! { "created_at": -1 })
+        .build();
+
     let mut cursor = collection
-        .find(doc! { "campus_id": &claims.campus_id }, None)
+        .find(filter, options)
         .await
         .context("Failed to query courses")?;
 
@@ -432,7 +507,15 @@ async fn get_courses(
         courses.push(course);
     }
 
-    Ok(HttpResponse::Ok().json(courses))
+    Ok(HttpResponse::Ok().json(serde_json::json!({
+        "data": courses,
+        "pagination": {
+            "page": pagination.page(),
+            "limit": pagination.limit(),
+            "total": total,
+            "total_pages": (total as f64 / pagination.limit() as f64).ceil() as u64
+        }
+    })))
 }
 
 // ── Enrollment Management ─────────────────────────────────────────────────────
@@ -489,12 +572,38 @@ async fn create_enrollment(
 async fn get_enrollments(
     data: web::Data<AppState>,
     req: HttpRequest,
+    query: web::Query<EnrollmentFilter>,
 ) -> Result<HttpResponse, AppError> {
     let claims = extract_claims(&req, &data.jwt_secret)?;
     let collection: Collection<Enrollment> = data.db.collection("enrollments");
 
+    // Build filter — always scope to campus_id, optionally filter by semester/course
+    let mut filter = doc! { "campus_id": &claims.campus_id };
+    if let Some(semester) = &query.semester {
+        if !semester.trim().is_empty() {
+            filter.insert("semester", semester.as_str());
+        }
+    }
+    if let Some(course_code) = &query.course_code {
+        if !course_code.trim().is_empty() {
+            filter.insert("course_code", course_code.as_str());
+        }
+    }
+
+    let pagination = PaginationParams { page: query.page, limit: query.limit };
+    let total = collection
+        .count_documents(filter.clone(), None)
+        .await
+        .context("Failed to count enrollments")?;
+
+    let options = FindOptions::builder()
+        .skip(pagination.skip())
+        .limit(pagination.limit() as i64)
+        .sort(doc! { "enrolled_at": -1 })
+        .build();
+
     let mut cursor = collection
-        .find(doc! { "campus_id": &claims.campus_id }, None)
+        .find(filter, options)
         .await
         .context("Failed to query enrollments")?;
 
@@ -505,7 +614,15 @@ async fn get_enrollments(
         enrollments.push(enrollment);
     }
 
-    Ok(HttpResponse::Ok().json(enrollments))
+    Ok(HttpResponse::Ok().json(serde_json::json!({
+        "data": enrollments,
+        "pagination": {
+            "page": pagination.page(),
+            "limit": pagination.limit(),
+            "total": total,
+            "total_pages": (total as f64 / pagination.limit() as f64).ceil() as u64
+        }
+    })))
 }
 
 // ── Attendance Management ─────────────────────────────────────────────────────
@@ -550,12 +667,44 @@ async fn mark_attendance(
 async fn get_attendance(
     data: web::Data<AppState>,
     req: HttpRequest,
+    query: web::Query<AttendanceFilter>,
 ) -> Result<HttpResponse, AppError> {
     let claims = extract_claims(&req, &data.jwt_secret)?;
     let collection: Collection<Attendance> = data.db.collection("attendance");
 
+    // Build filter — always scope to campus_id, optionally filter by status/course/student
+    let mut filter = doc! { "campus_id": &claims.campus_id };
+    if let Some(status) = &query.status {
+        if !status.trim().is_empty() {
+            validate_attendance_status(status)?;
+            filter.insert("status", status.as_str());
+        }
+    }
+    if let Some(course_code) = &query.course_code {
+        if !course_code.trim().is_empty() {
+            filter.insert("course_code", course_code.as_str());
+        }
+    }
+    if let Some(student_id) = &query.student_id {
+        if !student_id.trim().is_empty() {
+            filter.insert("student_id", student_id.as_str());
+        }
+    }
+
+    let pagination = PaginationParams { page: query.page, limit: query.limit };
+    let total = collection
+        .count_documents(filter.clone(), None)
+        .await
+        .context("Failed to count attendance records")?;
+
+    let options = FindOptions::builder()
+        .skip(pagination.skip())
+        .limit(pagination.limit() as i64)
+        .sort(doc! { "created_at": -1 })
+        .build();
+
     let mut cursor = collection
-        .find(doc! { "campus_id": &claims.campus_id }, None)
+        .find(filter, options)
         .await
         .context("Failed to query attendance")?;
 
@@ -566,7 +715,15 @@ async fn get_attendance(
         records.push(record);
     }
 
-    Ok(HttpResponse::Ok().json(records))
+    Ok(HttpResponse::Ok().json(serde_json::json!({
+        "data": records,
+        "pagination": {
+            "page": pagination.page(),
+            "limit": pagination.limit(),
+            "total": total,
+            "total_pages": (total as f64 / pagination.limit() as f64).ceil() as u64
+        }
+    })))
 }
 
 // ── Student Dashboard Endpoints ───────────────────────────────────────────────
