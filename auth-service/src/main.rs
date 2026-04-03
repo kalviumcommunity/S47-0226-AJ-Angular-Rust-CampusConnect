@@ -1,11 +1,63 @@
-use actix_web::{web, App, HttpServer, HttpResponse, HttpRequest, Error};
+use actix_web::{web, App, HttpServer, HttpResponse, HttpRequest, ResponseError};
 use actix_cors::Cors;
 use mongodb::{Client, Collection, bson::doc};
 use serde::{Deserialize, Serialize};
 use jsonwebtoken::{encode, decode, Header, Validation, EncodingKey, DecodingKey, Algorithm};
 use bcrypt::{hash, verify, DEFAULT_COST};
 use chrono::{Utc, Duration};
+use std::fmt;
 use std::env;
+use anyhow::Context;
+
+// ── Custom API Error Type ─────────────────────────────────────────────────────
+// Converts internal errors into structured JSON HTTP responses.
+// Using an enum lets each variant map to a specific HTTP status code.
+
+#[derive(Debug, Serialize)]
+struct ErrorBody {
+    error: String,
+}
+
+#[derive(Debug)]
+enum AppError {
+    Unauthorized(String),
+    BadRequest(String),
+    NotFound(String),
+    Internal(anyhow::Error),
+}
+
+impl fmt::Display for AppError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AppError::Unauthorized(msg) => write!(f, "{}", msg),
+            AppError::BadRequest(msg) => write!(f, "{}", msg),
+            AppError::NotFound(msg) => write!(f, "{}", msg),
+            AppError::Internal(e) => write!(f, "Internal server error: {}", e),
+        }
+    }
+}
+
+// ResponseError lets actix-web automatically convert AppError into an HTTP response.
+impl ResponseError for AppError {
+    fn error_response(&self) -> HttpResponse {
+        let body = ErrorBody { error: self.to_string() };
+        match self {
+            AppError::Unauthorized(_) => HttpResponse::Unauthorized().json(body),
+            AppError::BadRequest(_) => HttpResponse::BadRequest().json(body),
+            AppError::NotFound(_) => HttpResponse::NotFound().json(body),
+            AppError::Internal(_) => HttpResponse::InternalServerError().json(body),
+        }
+    }
+}
+
+// Allow anyhow::Error to be wrapped automatically via `?`
+impl From<anyhow::Error> for AppError {
+    fn from(e: anyhow::Error) -> Self {
+        AppError::Internal(e)
+    }
+}
+
+// ── Data Models ───────────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct User {
@@ -19,20 +71,20 @@ struct User {
     full_name: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Deserialize)]
 struct LoginRequest {
-    username: String,
-    password: String,
+    username: Option<String>,
+    password: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Deserialize)]
 struct RegisterRequest {
-    username: String,
-    password: String,
-    role: String,
-    campus_id: String,
-    email: String,
-    full_name: String,
+    username: Option<String>,
+    password: Option<String>,
+    role: Option<String>,
+    campus_id: Option<String>,
+    email: Option<String>,
+    full_name: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -58,17 +110,16 @@ struct UserInfo {
     full_name: String,
 }
 
-// ── Serde Demo: Typed Request / Response Models ──────────────────────────────
+// ── Serde Demo: Typed Request / Response Models ───────────────────────────────
 
-/// Deserialized from the incoming JSON body (POST /api/profile)
+/// All fields are Option so we can detect and reject missing ones explicitly.
 #[derive(Debug, Deserialize)]
 struct CreateProfileRequest {
-    name: String,
-    email: String,
-    role: String,
+    name: Option<String>,
+    email: Option<String>,
+    role: Option<String>,
 }
 
-/// Serialized into the JSON response body
 #[derive(Debug, Serialize)]
 struct ProfileResponse {
     id: i32,
@@ -78,14 +129,75 @@ struct ProfileResponse {
     message: String,
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ── App State ─────────────────────────────────────────────────────────────────
 
 struct AppState {
     db: mongodb::Database,
     jwt_secret: String,
 }
 
-// Health check endpoint
+// ── Input Validation Helpers ──────────────────────────────────────────────────
+
+/// Returns Err(AppError::BadRequest) if the string is empty or whitespace-only.
+fn require_field<'a>(value: &'a Option<String>, field: &str) -> Result<&'a str, AppError> {
+    match value {
+        Some(v) if !v.trim().is_empty() => Ok(v.as_str()),
+        Some(_) => Err(AppError::BadRequest(format!("'{}' must not be blank", field))),
+        None => Err(AppError::BadRequest(format!("'{}' is required", field))),
+    }
+}
+
+/// Validates that an email contains '@' — minimal but illustrative.
+fn validate_email(email: &str) -> Result<(), AppError> {
+    if email.contains('@') {
+        Ok(())
+    } else {
+        Err(AppError::BadRequest("Invalid email address".to_string()))
+    }
+}
+
+/// Validates allowed roles.
+fn validate_role(role: &str) -> Result<(), AppError> {
+    match role {
+        "student" | "teacher" | "hr" | "librarian" | "admin" => Ok(()),
+        _ => Err(AppError::BadRequest(format!(
+            "Invalid role '{}'. Must be one of: student, teacher, hr, librarian, admin",
+            role
+        ))),
+    }
+}
+
+// ── Service Layer (uses anyhow for internal error propagation) ────────────────
+
+/// Looks up a user by username. Returns Option<User> — None means not found.
+/// Uses anyhow's `?` + `.context()` to add meaningful context to DB errors.
+async fn find_user_by_username(
+    collection: &Collection<User>,
+    username: &str,
+) -> anyhow::Result<Option<User>> {
+    collection
+        .find_one(doc! { "username": username }, None)
+        .await
+        .context("Database error while looking up user")
+}
+
+/// Hashes a password using bcrypt. Returns anyhow::Result for clean propagation.
+fn hash_password(password: &str) -> anyhow::Result<String> {
+    hash(password, DEFAULT_COST).context("Failed to hash password")
+}
+
+/// Generates a JWT token for the given user claims.
+fn generate_token(claims: &Claims, secret: &str) -> anyhow::Result<String> {
+    encode(
+        &Header::default(),
+        claims,
+        &EncodingKey::from_secret(secret.as_bytes()),
+    )
+    .context("Failed to generate JWT token")
+}
+
+// ── Handlers ──────────────────────────────────────────────────────────────────
+
 async fn health_check() -> HttpResponse {
     HttpResponse::Ok().json(serde_json::json!({
         "status": "ok",
@@ -93,204 +205,219 @@ async fn health_check() -> HttpResponse {
     }))
 }
 
-// Register new user
+/// POST /api/auth/register
+/// Demonstrates: Option field validation, anyhow propagation, duplicate check.
 async fn register(
     data: web::Data<AppState>,
-    user_data: web::Json<RegisterRequest>,
-) -> Result<HttpResponse, Error> {
-    let collection: Collection<User> = data.db.collection("users");
+    body: web::Json<serde_json::Value>,
+) -> Result<HttpResponse, AppError> {
+    // Parse into our typed struct — missing fields become None
+    let req: RegisterRequest = serde_json::from_value(body.into_inner())
+        .map_err(|e| AppError::BadRequest(format!("Invalid JSON: {}", e)))?;
 
-    // Check if user already exists
-    let existing_user = collection
-        .find_one(doc! { "username": &user_data.username }, None)
-        .await
-        .map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
+    // Validate all required fields using Option explicitly
+    let username = require_field(&req.username, "username")?;
+    let password = require_field(&req.password, "password")?;
+    let role = require_field(&req.role, "role")?;
+    let campus_id = require_field(&req.campus_id, "campus_id")?;
+    let email = require_field(&req.email, "email")?;
+    let full_name = require_field(&req.full_name, "full_name")?;
 
-    if existing_user.is_some() {
-        return Ok(HttpResponse::BadRequest().json(serde_json::json!({
-            "error": "Username already exists"
-        })));
+    validate_email(email)?;
+    validate_role(role)?;
+
+    if password.len() < 6 {
+        return Err(AppError::BadRequest(
+            "Password must be at least 6 characters".to_string(),
+        ));
     }
 
-    // Hash password
-    let password_hash = hash(&user_data.password, DEFAULT_COST)
-        .map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
+    let collection: Collection<User> = data.db.collection("users");
+
+    // Use service function — anyhow error auto-converts to AppError::Internal
+    let existing = find_user_by_username(&collection, username).await?;
+    if existing.is_some() {
+        return Err(AppError::BadRequest("Username already exists".to_string()));
+    }
+
+    let password_hash = hash_password(password)?;
 
     let new_user = User {
         id: None,
-        username: user_data.username.clone(),
+        username: username.to_string(),
         password_hash,
-        role: user_data.role.clone(),
-        campus_id: user_data.campus_id.clone(),
-        email: user_data.email.clone(),
-        full_name: user_data.full_name.clone(),
+        role: role.to_string(),
+        campus_id: campus_id.to_string(),
+        email: email.to_string(),
+        full_name: full_name.to_string(),
     };
 
     collection
         .insert_one(new_user, None)
         .await
-        .map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
+        .context("Failed to insert user into database")?;
 
     Ok(HttpResponse::Ok().json(serde_json::json!({
         "message": "User registered successfully"
     })))
 }
 
-// Login user
+/// POST /api/auth/login
+/// Demonstrates: Option-based field validation, Result for credential check.
 async fn login(
     data: web::Data<AppState>,
-    credentials: web::Json<LoginRequest>,
-) -> Result<HttpResponse, Error> {
+    body: web::Json<serde_json::Value>,
+) -> Result<HttpResponse, AppError> {
+    let req: LoginRequest = serde_json::from_value(body.into_inner())
+        .map_err(|e| AppError::BadRequest(format!("Invalid JSON: {}", e)))?;
+
+    let username = require_field(&req.username, "username")?;
+    let password = require_field(&req.password, "password")?;
+
     let collection: Collection<User> = data.db.collection("users");
 
-    // Find user
-    let user = collection
-        .find_one(doc! { "username": &credentials.username }, None)
-        .await
-        .map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
+    // find_user_by_username returns Option<User> — None means user doesn't exist
+    let user = find_user_by_username(&collection, username)
+        .await?
+        .ok_or_else(|| AppError::Unauthorized("Invalid credentials".to_string()))?;
 
-    match user {
-        Some(user) => {
-            // Verify password
-            let valid = verify(&credentials.password, &user.password_hash)
-                .map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
+    // verify returns Result<bool> — we propagate errors via anyhow context
+    let valid = verify(password, &user.password_hash)
+        .context("Failed to verify password")?;
 
-            if !valid {
-                return Ok(HttpResponse::Unauthorized().json(serde_json::json!({
-                    "error": "Invalid credentials"
-                })));
-            }
-
-            // Generate JWT token
-            let expiration = Utc::now()
-                .checked_add_signed(Duration::hours(24))
-                .expect("valid timestamp")
-                .timestamp();
-
-            let claims = Claims {
-                sub: user.username.clone(),
-                role: user.role.clone(),
-                campus_id: user.campus_id.clone(),
-                exp: expiration as usize,
-            };
-
-            let token = encode(
-                &Header::default(),
-                &claims,
-                &EncodingKey::from_secret(data.jwt_secret.as_bytes()),
-            )
-            .map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
-
-            let response = TokenResponse {
-                token,
-                user: UserInfo {
-                    username: user.username,
-                    role: user.role,
-                    campus_id: user.campus_id,
-                    email: user.email,
-                    full_name: user.full_name,
-                },
-            };
-
-            Ok(HttpResponse::Ok().json(response))
-        }
-        None => Ok(HttpResponse::Unauthorized().json(serde_json::json!({
-            "error": "Invalid credentials"
-        }))),
+    if !valid {
+        return Err(AppError::Unauthorized("Invalid credentials".to_string()));
     }
-}
 
-// ── Serde Demo Endpoint ───────────────────────────────────────────────────────
-// POST /api/profile
-// Actix-Web automatically deserializes the JSON body into CreateProfileRequest
-// via Serde's Deserialize. If the body is missing or malformed, Actix returns
-// 400 Bad Request before this handler is even called.
-async fn create_profile(
-    body: web::Json<CreateProfileRequest>,
-) -> HttpResponse {
-    // Build a typed response struct — Serde's Serialize turns it into JSON.
-    let response = ProfileResponse {
-        id: 1,
-        name: body.name.clone(),
-        email: body.email.clone(),
-        role: body.role.clone(),
-        message: "Profile created successfully".to_string(),
+    let expiration = Utc::now()
+        .checked_add_signed(Duration::hours(24))
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("Timestamp overflow")))?
+        .timestamp();
+
+    let claims = Claims {
+        sub: user.username.clone(),
+        role: user.role.clone(),
+        campus_id: user.campus_id.clone(),
+        exp: expiration as usize,
     };
-    HttpResponse::Created().json(response)
-}
-// ─────────────────────────────────────────────────────────────────────────────
 
-// Validate token endpoint
+    let token = generate_token(&claims, &data.jwt_secret)?;
+
+    Ok(HttpResponse::Ok().json(TokenResponse {
+        token,
+        user: UserInfo {
+            username: user.username,
+            role: user.role,
+            campus_id: user.campus_id,
+            email: user.email,
+            full_name: user.full_name,
+        },
+    }))
+}
+
+/// POST /api/profile
+/// Demonstrates: missing field detection via Option, structured error response.
+async fn create_profile(
+    body: web::Json<serde_json::Value>,
+) -> Result<HttpResponse, AppError> {
+    let req: CreateProfileRequest = serde_json::from_value(body.into_inner())
+        .map_err(|e| AppError::BadRequest(format!("Invalid JSON: {}", e)))?;
+
+    // Each field is Option — we explicitly check and return clear errors
+    let name = require_field(&req.name, "name")?;
+    let email = require_field(&req.email, "email")?;
+    let role = require_field(&req.role, "role")?;
+
+    validate_email(email)?;
+
+    Ok(HttpResponse::Created().json(ProfileResponse {
+        id: 1,
+        name: name.to_string(),
+        email: email.to_string(),
+        role: role.to_string(),
+        message: "Profile created successfully".to_string(),
+    }))
+}
+
+/// GET /api/auth/validate
 async fn validate_token(
     data: web::Data<AppState>,
     req: HttpRequest,
-) -> Result<HttpResponse, Error> {
-    if let Some(auth_header) = req.headers().get("Authorization") {
-        if let Ok(auth_str) = auth_header.to_str() {
-            if auth_str.starts_with("Bearer ") {
-                let token = &auth_str[7..];
-                
-                match decode::<Claims>(
-                    token,
-                    &DecodingKey::from_secret(data.jwt_secret.as_bytes()),
-                    &Validation::new(Algorithm::HS256),
-                ) {
-                    Ok(token_data) => {
-                        return Ok(HttpResponse::Ok().json(serde_json::json!({
-                            "valid": true,
-                            "claims": token_data.claims
-                        })));
-                    }
-                    Err(_) => {
-                        return Ok(HttpResponse::Unauthorized().json(serde_json::json!({
-                            "valid": false,
-                            "error": "Invalid token"
-                        })));
-                    }
-                }
-            }
-        }
+) -> Result<HttpResponse, AppError> {
+    let auth_header = req
+        .headers()
+        .get("Authorization")
+        .ok_or_else(|| AppError::Unauthorized("No token provided".to_string()))?;
+
+    let auth_str = auth_header
+        .to_str()
+        .map_err(|_| AppError::Unauthorized("Malformed Authorization header".to_string()))?;
+
+    if !auth_str.starts_with("Bearer ") {
+        return Err(AppError::Unauthorized(
+            "Authorization header must use Bearer scheme".to_string(),
+        ));
     }
 
-    Ok(HttpResponse::Unauthorized().json(serde_json::json!({
-        "valid": false,
-        "error": "No token provided"
-    })))
+    let token = &auth_str[7..];
+
+    match decode::<Claims>(
+        token,
+        &DecodingKey::from_secret(data.jwt_secret.as_bytes()),
+        &Validation::new(Algorithm::HS256),
+    ) {
+        Ok(token_data) => Ok(HttpResponse::Ok().json(serde_json::json!({
+            "valid": true,
+            "claims": token_data.claims
+        }))),
+        Err(_) => Err(AppError::Unauthorized("Invalid or expired token".to_string())),
+    }
 }
+
+// ── Main ──────────────────────────────────────────────────────────────────────
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     dotenv::dotenv().ok();
     env_logger::init();
 
-    let mongodb_uri = env::var("MONGODB_URI").unwrap_or_else(|_| "mongodb://localhost:27017".to_string());
-    let database_name = env::var("DATABASE_NAME").unwrap_or_else(|_| "campusconnect".to_string());
-    let jwt_secret = env::var("JWT_SECRET").unwrap_or_else(|_| "your-secret-key".to_string());
+    let mongodb_uri = env::var("MONGODB_URI")
+        .unwrap_or_else(|_| "mongodb://localhost:27017".to_string());
+    let database_name = env::var("DATABASE_NAME")
+        .unwrap_or_else(|_| "campusconnect".to_string());
+    let jwt_secret = env::var("JWT_SECRET")
+        .unwrap_or_else(|_| "your-secret-key".to_string());
     let port = env::var("PORT").unwrap_or_else(|_| "8080".to_string());
 
-    println!("🔐 Starting Auth Service...");
-    println!("📡 Connecting to MongoDB: {}", mongodb_uri);
+    println!("Starting Auth Service...");
+    println!("Connecting to MongoDB: {}", mongodb_uri);
 
     let client = Client::with_uri_str(&mongodb_uri)
         .await
         .expect("Failed to connect to MongoDB");
-    
+
     let db = client.database(&database_name);
 
-    println!("✅ Connected to MongoDB");
-    println!("🚀 Server starting on http://127.0.0.1:{}", port);
+    println!("Connected to MongoDB");
+    println!("Server starting on http://127.0.0.1:{}", port);
 
-    let app_state = web::Data::new(AppState {
-        db,
-        jwt_secret,
-    });
+    let app_state = web::Data::new(AppState { db, jwt_secret });
 
     HttpServer::new(move || {
         let cors = Cors::permissive();
-
         App::new()
             .wrap(cors)
             .app_data(app_state.clone())
+            // Return JSON for malformed request bodies instead of plain-text 400
+            .app_data(
+                web::JsonConfig::default()
+                    .error_handler(|err, _req| {
+                        let response = HttpResponse::BadRequest().json(ErrorBody {
+                            error: format!("Invalid JSON body: {}", err),
+                        });
+                        actix_web::error::InternalError::from_response(err, response).into()
+                    }),
+            )
             .route("/health", web::get().to(health_check))
             .route("/api/auth/register", web::post().to(register))
             .route("/api/auth/login", web::post().to(login))

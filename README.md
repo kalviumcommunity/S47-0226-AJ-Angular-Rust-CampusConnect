@@ -364,3 +364,146 @@ This project was developed for academic and learning purposes as part of a struc
 
 ---
 
+
+---
+
+## 🛡 Error Handling — PR Documentation
+
+This section documents the robust error handling implementation added to `auth-service` and `academics-service` as part of the backend error handling assignment.
+
+---
+
+### Where Errors Are Handled
+
+**auth-service/src/main.rs**
+
+- `register` — validates all required fields, checks for duplicate usernames, hashes passwords
+- `login` — validates credentials, returns 401 on wrong password or unknown user
+- `create_profile` — rejects missing or blank fields with descriptive 400 errors
+- `validate_token` — returns 401 with a clear message for missing/invalid/expired tokens
+- `extract_claims` (inline) — parses the Authorization header safely, no panics
+
+**academics-service/src/main.rs**
+
+- Every handler validates required fields before touching the database
+- `create_result` — validates marks range and exam type enum
+- `mark_attendance` / `mark_batch_attendance` — validates status enum (present/absent/late)
+- `review_student_note` — validates review status enum
+- `get_batch_students` — returns 404 when batch is not found
+- `create_enrollment` — returns 400 if student is already enrolled
+
+---
+
+### Why Result and Option Were Used
+
+`Result<T, AppError>` is the return type for every handler. This forces all error paths to be handled explicitly — there are no unchecked `unwrap()` calls anywhere in the handlers.
+
+`Option<T>` is used for:
+- All request struct fields (e.g. `username: Option<String>`) so missing JSON fields become `None` instead of causing a deserialization panic
+- MongoDB `find_one` results — `None` means "not found" and is handled with `.ok_or_else(|| AppError::NotFound(...))`
+- `course.map(|c| c.course_name).unwrap_or_default()` in `get_student_enrollments` — safely extracts an optional course name
+
+---
+
+### Where anyhow Is Applied and Why
+
+`anyhow` is used in the service-layer helper functions that perform database operations:
+
+- `find_user_by_username` (auth-service) — wraps the MongoDB call with `.context("Database error while looking up user")` so if the DB fails, the error message is meaningful
+- `hash_password` — wraps bcrypt with `.context("Failed to hash password")`
+- `generate_token` — wraps JWT encoding with `.context("Failed to generate JWT token")`
+- `find_batch_by_id` (academics-service) — wraps ObjectId parsing and DB lookup with context strings
+
+All handler functions accept `anyhow::Result` from these helpers and convert them to `AppError::Internal` via the `From<anyhow::Error>` impl. This means the `?` operator works cleanly throughout.
+
+---
+
+### How API Errors Are Returned to the Frontend
+
+A custom `AppError` enum implements actix-web's `ResponseError` trait. Each variant maps to an HTTP status code and serializes to a consistent JSON shape:
+
+```json
+{ "error": "descriptive message here" }
+```
+
+| Variant | HTTP Status |
+|---|---|
+| `AppError::Unauthorized` | 401 |
+| `AppError::Forbidden` | 403 |
+| `AppError::BadRequest` | 400 |
+| `AppError::NotFound` | 404 |
+| `AppError::Internal` | 500 |
+
+A custom `JsonConfig` error handler is also registered so malformed request bodies (invalid JSON syntax) return a 400 JSON response instead of actix's default plain-text error.
+
+---
+
+### Example Requests That Trigger Errors
+
+**Missing required field — POST /api/auth/register**
+```json
+{ "username": "alice", "password": "secret123" }
+```
+Response (400):
+```json
+{ "error": "'role' is required" }
+```
+
+**Invalid role value — POST /api/auth/register**
+```json
+{ "username": "alice", "password": "secret123", "role": "superuser", "campus_id": "A", "email": "a@b.com", "full_name": "Alice" }
+```
+Response (400):
+```json
+{ "error": "Invalid role 'superuser'. Must be one of: student, teacher, hr, librarian, admin" }
+```
+
+**Wrong password — POST /api/auth/login**
+```json
+{ "username": "alice", "password": "wrongpass" }
+```
+Response (401):
+```json
+{ "error": "Invalid credentials" }
+```
+
+**No Authorization header — GET /api/courses**
+
+Response (401):
+```json
+{ "error": "No token provided" }
+```
+
+**Invalid attendance status — POST /api/attendance**
+```json
+{ "student_id": "s1", "course_code": "CS101", "date": "2026-04-03", "status": "maybe" }
+```
+Response (400):
+```json
+{ "error": "Invalid status 'maybe'. Must be: present, absent, or late" }
+```
+
+**marks_obtained exceeds total_marks — POST /api/results**
+```json
+{ "student_id": "s1", "course_code": "CS101", "exam_type": "final", "marks_obtained": 110, "total_marks": 100, "semester": "S1" }
+```
+Response (400):
+```json
+{ "error": "marks_obtained must be between 0 and total_marks" }
+```
+
+**Batch not found — GET /api/batches/000000000000000000000000/students**
+
+Response (404):
+```json
+{ "error": "Batch not found" }
+```
+
+**Student already enrolled — POST /api/enrollments**
+```json
+{ "student_id": "s1", "course_code": "CS101", "semester": "S1" }
+```
+Response (400):
+```json
+{ "error": "Student already enrolled in this course" }
+```
