@@ -75,12 +75,27 @@ import { AuthService } from '../services/auth.service';
           &nbsp;|&nbsp;
           <a routerLink="/home" style="color:#1976d2; font-weight:500;">Home</a>
         </p>
+
+        <!-- Demo login — bypasses backend for guard demonstration -->
+        <div style="margin-top:24px; border-top:1px solid #eee; padding-top:16px;">
+          <p style="text-align:center; font-size:12px; color:#999; margin-bottom:10px;">
+            Demo Login (no backend required)
+          </p>
+          <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:center;">
+            <button class="btn btn-demo" (click)="demoLogin('student')">Student</button>
+            <button class="btn btn-demo" (click)="demoLogin('teacher')">Teacher</button>
+            <button class="btn btn-demo" (click)="demoLogin('hr')">HR</button>
+            <button class="btn btn-demo" (click)="demoLogin('librarian')">Librarian</button>
+          </div>
+        </div>
       </div>
     </div>
   `,
   styles: [`
     .input-error { border-color: #e53935 !important; }
     .error-hints { margin-top: 4px; font-size: 12px; color: #e53935; }
+    .btn-demo { background: #f5f5f5; color: #333; border: 1px solid #ddd; padding: 6px 14px; border-radius: 6px; font-size: 12px; cursor: pointer; }
+    .btn-demo:hover { background: #e3f2fd; border-color: #1976d2; color: #1976d2; }
   `]
 })
 export class LoginComponent {
@@ -127,5 +142,10 @@ export class LoginComponent {
         this.serverError = err.error?.error || 'Login failed. Please try again.';
       }
     });
+  }
+
+  /** Bypasses backend — sets a demo token and user for guard demonstration */
+  demoLogin(role: 'student' | 'teacher' | 'hr' | 'librarian'): void {
+    this.authService.demoLogin(role);
   }
 }
