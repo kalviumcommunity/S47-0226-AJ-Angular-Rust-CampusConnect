@@ -58,6 +58,28 @@ struct UserInfo {
     full_name: String,
 }
 
+// ── Serde Demo: Typed Request / Response Models ──────────────────────────────
+
+/// Deserialized from the incoming JSON body (POST /api/profile)
+#[derive(Debug, Deserialize)]
+struct CreateProfileRequest {
+    name: String,
+    email: String,
+    role: String,
+}
+
+/// Serialized into the JSON response body
+#[derive(Debug, Serialize)]
+struct ProfileResponse {
+    id: i32,
+    name: String,
+    email: String,
+    role: String,
+    message: String,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 struct AppState {
     db: mongodb::Database,
     jwt_secret: String,
@@ -178,6 +200,26 @@ async fn login(
     }
 }
 
+// ── Serde Demo Endpoint ───────────────────────────────────────────────────────
+// POST /api/profile
+// Actix-Web automatically deserializes the JSON body into CreateProfileRequest
+// via Serde's Deserialize. If the body is missing or malformed, Actix returns
+// 400 Bad Request before this handler is even called.
+async fn create_profile(
+    body: web::Json<CreateProfileRequest>,
+) -> HttpResponse {
+    // Build a typed response struct — Serde's Serialize turns it into JSON.
+    let response = ProfileResponse {
+        id: 1,
+        name: body.name.clone(),
+        email: body.email.clone(),
+        role: body.role.clone(),
+        message: "Profile created successfully".to_string(),
+    };
+    HttpResponse::Created().json(response)
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 // Validate token endpoint
 async fn validate_token(
     data: web::Data<AppState>,
@@ -253,6 +295,7 @@ async fn main() -> std::io::Result<()> {
             .route("/api/auth/register", web::post().to(register))
             .route("/api/auth/login", web::post().to(login))
             .route("/api/auth/validate", web::get().to(validate_token))
+            .route("/api/profile", web::post().to(create_profile))
     })
     .bind(format!("127.0.0.1:{}", port))?
     .run()
