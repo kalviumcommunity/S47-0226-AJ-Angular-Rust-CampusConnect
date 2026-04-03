@@ -133,20 +133,45 @@ Authorization: Bearer <token>
 
 **Headers:** Authorization required
 
+**Query Parameters (all optional):**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `page` | integer | `1` | Page number (1-indexed) |
+| `limit` | integer | `20` | Records per page (max 100) |
+| `department` | string | — | Filter by department name |
+
+**Example Requests:**
+```bash
+# Page 1, default limit
+curl -X GET "http://localhost:8081/api/courses?page=1&limit=10" \
+  -H "Authorization: Bearer $TOKEN"
+
+# Filter by department
+curl -X GET "http://localhost:8081/api/courses?department=Computer%20Science&page=1&limit=5" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
 **Response:**
 ```json
-[
-  {
-    "id": "...",
-    "course_code": "CS101",
-    "course_name": "Introduction to Programming",
-    "credits": 3,
-    "department": "Computer Science",
-    "campus_id": "CAMPUS_A",
-    "created_at": "2024-02-24T10:00:00Z"
+{
+  "data": [
+    {
+      "course_code": "CS101",
+      "course_name": "Introduction to Programming",
+      "credits": 3,
+      "department": "Computer Science",
+      "campus_id": "CAMPUS_A",
+      "created_at": "2024-02-24T10:00:00Z"
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "limit": 10,
+    "total": 42,
+    "total_pages": 5
   }
-]
-```
+}
 
 ### Enrollments
 
@@ -170,6 +195,46 @@ Authorization: Bearer <token>
 **GET** `/api/enrollments`
 
 **Headers:** Authorization required
+
+**Query Parameters (all optional):**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `page` | integer | `1` | Page number (1-indexed) |
+| `limit` | integer | `20` | Records per page (max 100) |
+| `semester` | string | — | Filter by semester, e.g. `Fall 2024` |
+| `course_code` | string | — | Filter by course code |
+
+**Example Requests:**
+```bash
+# Get page 2 with 10 per page
+curl -X GET "http://localhost:8081/api/enrollments?page=2&limit=10" \
+  -H "Authorization: Bearer $TOKEN"
+
+# Filter by semester and course
+curl -X GET "http://localhost:8081/api/enrollments?semester=Fall%202024&course_code=CS101" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+**Response:**
+```json
+{
+  "data": [
+    {
+      "student_id": "STU001",
+      "course_code": "CS101",
+      "semester": "Fall 2024",
+      "campus_id": "CAMPUS_A",
+      "enrolled_at": "2024-02-24T10:00:00Z"
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "limit": 20,
+    "total": 150,
+    "total_pages": 8
+  }
+}
 
 ### Attendance
 
@@ -196,6 +261,52 @@ Authorization: Bearer <token>
 **GET** `/api/attendance`
 
 **Headers:** Authorization required
+
+**Query Parameters (all optional):**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `page` | integer | `1` | Page number (1-indexed) |
+| `limit` | integer | `20` | Records per page (max 100) |
+| `status` | string | — | Filter by status: `present`, `absent`, `late` |
+| `course_code` | string | — | Filter by course code |
+| `student_id` | string | — | Filter by student ID |
+
+**Example Requests:**
+```bash
+# Get all absent records, page 1
+curl -X GET "http://localhost:8081/api/attendance?status=absent&page=1&limit=20" \
+  -H "Authorization: Bearer $TOKEN"
+
+# Filter by course and status
+curl -X GET "http://localhost:8081/api/attendance?course_code=CS101&status=present&limit=50" \
+  -H "Authorization: Bearer $TOKEN"
+
+# Filter by student
+curl -X GET "http://localhost:8081/api/attendance?student_id=STU001&page=1&limit=10" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+**Response:**
+```json
+{
+  "data": [
+    {
+      "student_id": "STU001",
+      "course_code": "CS101",
+      "date": "2024-02-24",
+      "status": "present",
+      "campus_id": "CAMPUS_A",
+      "created_at": "2024-02-24T10:00:00Z"
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "limit": 20,
+    "total": 500,
+    "total_pages": 25
+  }
+}
 
 ---
 
