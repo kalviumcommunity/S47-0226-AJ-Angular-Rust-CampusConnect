@@ -76,4 +76,22 @@ export class AuthService {
   isLoggedIn(): boolean {
     return !!this.getToken();
   }
+
+  /**
+   * Demo helper — simulates login/logout without a real backend.
+   * Useful for demoing route guard behaviour.
+   */
+  demoLogin(role: 'student' | 'teacher' | 'hr' | 'librarian' = 'student'): void {
+    const demoUser: UserInfo = {
+      username: `demo_${role}`,
+      role,
+      campus_id: 'DEMO001',
+      email: `demo_${role}@campus.edu`,
+      full_name: `Demo ${role.charAt(0).toUpperCase() + role.slice(1)}`
+    };
+    localStorage.setItem('token', 'demo-token');
+    localStorage.setItem('user', JSON.stringify(demoUser));
+    this.currentUserSubject.next(demoUser);
+    this.router.navigate([`/${role}`]);
+  }
 }
