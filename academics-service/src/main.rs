@@ -1,4 +1,9 @@
-use actix_web::{web, App, HttpServer, HttpResponse, HttpRequest, ResponseError};
+use actix_web::{
+    dev::{forward_ready, Service, ServiceRequest, ServiceResponse, Transform},
+    web, App, HttpServer, HttpResponse, HttpRequest, ResponseError,
+    http::header,
+    body::EitherBody,
+};
 use actix_cors::Cors;
 use mongodb::{Client, Collection, bson::{doc, oid::ObjectId}, options::FindOptions};
 use serde::{Deserialize, Serialize};
@@ -6,7 +11,11 @@ use jsonwebtoken::{decode, DecodingKey, Validation, Algorithm};
 use chrono::{DateTime, Utc};
 use std::fmt;
 use std::env;
+use std::future::{ready, Ready, Future};
+use std::pin::Pin;
+use std::rc::Rc;
 use anyhow::Context;
+use log::info;
 
 // ── Custom API Error Type ─────────────────────────────────────────────────────
 
@@ -248,7 +257,146 @@ struct AppState {
     jwt_secret: String,
 }
 
-// ── Pagination & Filter Query Params ─────────────────────────────────────────
+// ── Logging Middleware ────────────────────────────────────────────────────────
+
+pub struct RequestLogger;
+
+impl<S, B> Transform<S, ServiceRequest> for RequestLogger
+where
+    S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = actix_web::Error> + 'static,
+    B: 'static,
+{
+    type Response = ServiceResponse<B>;
+    type Error = actix_web::Error;
+    type Transform = RequestLoggerMiddleware<S>;
+    type InitError = ();
+    type Future = Ready<Result<Self::Transform, Self::InitError>>;
+
+    fn new_transform(&self, service: S) -> Self::Future {
+        ready(Ok(RequestLoggerMiddleware { service: Rc::new(service) }))
+    }
+}
+
+pub struct RequestLoggerMiddleware<S> {
+    service: Rc<S>,
+}
+
+impl<S, B> Service<ServiceRequest> for RequestLoggerMiddleware<S>
+where
+    S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = actix_web::Error> + 'static,
+    B: 'static,
+{
+    type Response = ServiceResponse<B>;
+    type Error = actix_web::Error;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
+
+    forward_ready!(service);
+
+    fn call(&self, req: ServiceRequest) -> Self::Future {
+        let method = req.method().to_string();
+        let path = req.path().to_string();
+        let svc = self.service.clone();
+
+        Box::pin(async move {
+            let res = svc.call(req).await?;
+            info!("{} {} -> {}", method, path, res.status().as_u16());
+            Ok(res)
+        })
+    }
+}
+
+// ── JWT Auth Middleware ───────────────────────────────────────────────────────
+// Blocks requests to protected routes that lack a valid Bearer token.
+// Only /health is public; all API routes require a valid JWT.
+
+pub struct JwtAuth {
+    pub jwt_secret: String,
+}
+
+impl<S, B> Transform<S, ServiceRequest> for JwtAuth
+where
+    S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = actix_web::Error> + 'static,
+    B: 'static,
+{
+    type Response = ServiceResponse<EitherBody<B>>;
+    type Error = actix_web::Error;
+    type Transform = JwtAuthMiddleware<S>;
+    type InitError = ();
+    type Future = Ready<Result<Self::Transform, Self::InitError>>;
+
+    fn new_transform(&self, service: S) -> Self::Future {
+        ready(Ok(JwtAuthMiddleware {
+            service: Rc::new(service),
+            jwt_secret: self.jwt_secret.clone(),
+        }))
+    }
+}
+
+pub struct JwtAuthMiddleware<S> {
+    service: Rc<S>,
+    jwt_secret: String,
+}
+
+fn is_public_route(path: &str, method: &str) -> bool {
+    matches!((method, path), ("GET", "/health"))
+}
+
+impl<S, B> Service<ServiceRequest> for JwtAuthMiddleware<S>
+where
+    S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = actix_web::Error> + 'static,
+    B: 'static,
+{
+    type Response = ServiceResponse<EitherBody<B>>;
+    type Error = actix_web::Error;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
+
+    forward_ready!(service);
+
+    fn call(&self, req: ServiceRequest) -> Self::Future {
+        let path = req.path().to_string();
+        let method = req.method().to_string();
+        let svc = self.service.clone();
+        let secret = self.jwt_secret.clone();
+
+        Box::pin(async move {
+            if is_public_route(&path, &method) {
+                return svc.call(req).await.map(|r| r.map_into_left_body());
+            }
+
+            let auth_result = req
+                .headers()
+                .get(header::AUTHORIZATION)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.strip_prefix("Bearer "))
+                .ok_or("missing")
+                .and_then(|token| {
+                    decode::<Claims>(
+                        token,
+                        &DecodingKey::from_secret(secret.as_bytes()),
+                        &Validation::new(Algorithm::HS256),
+                    )
+                    .map_err(|_| "invalid")
+                });
+
+            match auth_result {
+                Ok(_) => svc.call(req).await.map(|r| r.map_into_left_body()),
+                Err(reason) => {
+                    let msg = if reason == "missing" {
+                        "No token provided"
+                    } else {
+                        "Invalid or expired token"
+                    };
+                    let response = HttpResponse::Unauthorized()
+                        .json(ErrorBody { error: msg.to_string() });
+                    let (http_req, _) = req.into_parts();
+                    Ok(ServiceResponse::new(http_req, response).map_into_right_body())
+                }
+            }
+        })
+    }
+}
+
+
 
 /// Shared pagination params: ?page=1&limit=20
 #[derive(Debug, Deserialize)]
@@ -1398,12 +1546,26 @@ async fn main() -> std::io::Result<()> {
     println!("Connected to MongoDB");
     println!("Server starting on http://127.0.0.1:{}", port);
 
-    let app_state = web::Data::new(AppState { db, jwt_secret });
+    let app_state = web::Data::new(AppState { db, jwt_secret: jwt_secret.clone() });
 
     HttpServer::new(move || {
-        let cors = Cors::permissive();
+        // Explicit CORS: only allow the Angular dev server origin.
+        let cors = Cors::default()
+            .allowed_origin("http://localhost:4200")
+            .allowed_methods(vec!["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+            .allowed_headers(vec![
+                header::AUTHORIZATION,
+                header::CONTENT_TYPE,
+                header::ACCEPT,
+            ])
+            .max_age(3600);
+
         App::new()
             .wrap(cors)
+            // Log every request: METHOD /path -> STATUS
+            .wrap(RequestLogger)
+            // JWT auth gate — all /api/* routes require a valid Bearer token
+            .wrap(JwtAuth { jwt_secret: jwt_secret.clone() })
             .app_data(app_state.clone())
             .app_data(
                 web::JsonConfig::default()
@@ -1414,7 +1576,9 @@ async fn main() -> std::io::Result<()> {
                         actix_web::error::InternalError::from_response(err, response).into()
                     }),
             )
+            // Public route
             .route("/health", web::get().to(health_check))
+            // Protected routes (JWT middleware enforces auth above)
             .route("/api/courses", web::post().to(create_course))
             .route("/api/courses", web::get().to(get_courses))
             .route("/api/enrollments", web::post().to(create_enrollment))

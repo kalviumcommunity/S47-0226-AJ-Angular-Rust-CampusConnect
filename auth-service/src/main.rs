@@ -1,4 +1,9 @@
-use actix_web::{web, App, HttpServer, HttpResponse, HttpRequest, ResponseError};
+use actix_web::{
+    dev::{forward_ready, Service, ServiceRequest, ServiceResponse, Transform},
+    web, App, HttpServer, HttpResponse, HttpRequest, ResponseError,
+    http::header,
+    body::EitherBody,
+};
 use actix_cors::Cors;
 use mongodb::{Client, Collection, bson::doc};
 use serde::{Deserialize, Serialize};
@@ -7,7 +12,11 @@ use bcrypt::{hash, verify, DEFAULT_COST};
 use chrono::{Utc, Duration};
 use std::fmt;
 use std::env;
+use std::future::{ready, Ready, Future};
+use std::pin::Pin;
+use std::rc::Rc;
 use anyhow::Context;
+use log::info;
 
 // ── Custom API Error Type ─────────────────────────────────────────────────────
 // Converts internal errors into structured JSON HTTP responses.
@@ -136,7 +145,155 @@ struct AppState {
     jwt_secret: String,
 }
 
-// ── Input Validation Helpers ──────────────────────────────────────────────────
+// ── Logging Middleware ────────────────────────────────────────────────────────
+// Logs method, path, and response status for every request.
+
+pub struct RequestLogger;
+
+impl<S, B> Transform<S, ServiceRequest> for RequestLogger
+where
+    S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = actix_web::Error> + 'static,
+    B: 'static,
+{
+    type Response = ServiceResponse<B>;
+    type Error = actix_web::Error;
+    type Transform = RequestLoggerMiddleware<S>;
+    type InitError = ();
+    type Future = Ready<Result<Self::Transform, Self::InitError>>;
+
+    fn new_transform(&self, service: S) -> Self::Future {
+        ready(Ok(RequestLoggerMiddleware { service: Rc::new(service) }))
+    }
+}
+
+pub struct RequestLoggerMiddleware<S> {
+    service: Rc<S>,
+}
+
+impl<S, B> Service<ServiceRequest> for RequestLoggerMiddleware<S>
+where
+    S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = actix_web::Error> + 'static,
+    B: 'static,
+{
+    type Response = ServiceResponse<B>;
+    type Error = actix_web::Error;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
+
+    forward_ready!(service);
+
+    fn call(&self, req: ServiceRequest) -> Self::Future {
+        let method = req.method().to_string();
+        let path = req.path().to_string();
+        let svc = self.service.clone();
+
+        Box::pin(async move {
+            let res = svc.call(req).await?;
+            info!("{} {} -> {}", method, path, res.status().as_u16());
+            Ok(res)
+        })
+    }
+}
+
+// ── JWT Auth Middleware ───────────────────────────────────────────────────────
+// Blocks requests to protected routes that lack a valid Bearer token.
+// Public routes (/health, /api/auth/login, /api/auth/register) are skipped.
+
+pub struct JwtAuth {
+    pub jwt_secret: String,
+}
+
+impl<S, B> Transform<S, ServiceRequest> for JwtAuth
+where
+    S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = actix_web::Error> + 'static,
+    B: 'static,
+{
+    type Response = ServiceResponse<EitherBody<B>>;
+    type Error = actix_web::Error;
+    type Transform = JwtAuthMiddleware<S>;
+    type InitError = ();
+    type Future = Ready<Result<Self::Transform, Self::InitError>>;
+
+    fn new_transform(&self, service: S) -> Self::Future {
+        ready(Ok(JwtAuthMiddleware {
+            service: Rc::new(service),
+            jwt_secret: self.jwt_secret.clone(),
+        }))
+    }
+}
+
+pub struct JwtAuthMiddleware<S> {
+    service: Rc<S>,
+    jwt_secret: String,
+}
+
+/// Routes that do NOT require a JWT token.
+fn is_public_route(path: &str, method: &str) -> bool {
+    matches!(
+        (method, path),
+        ("GET", "/health")
+            | ("POST", "/api/auth/login")
+            | ("POST", "/api/auth/register")
+    )
+}
+
+impl<S, B> Service<ServiceRequest> for JwtAuthMiddleware<S>
+where
+    S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = actix_web::Error> + 'static,
+    B: 'static,
+{
+    type Response = ServiceResponse<EitherBody<B>>;
+    type Error = actix_web::Error;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
+
+    forward_ready!(service);
+
+    fn call(&self, req: ServiceRequest) -> Self::Future {
+        let path = req.path().to_string();
+        let method = req.method().to_string();
+        let svc = self.service.clone();
+        let secret = self.jwt_secret.clone();
+
+        Box::pin(async move {
+            // Skip auth check for public routes
+            if is_public_route(&path, &method) {
+                return svc.call(req).await.map(|r| r.map_into_left_body());
+            }
+
+            // Extract and validate the Bearer token
+            let auth_result = req
+                .headers()
+                .get(header::AUTHORIZATION)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.strip_prefix("Bearer "))
+                .ok_or("missing")
+                .and_then(|token| {
+                    decode::<Claims>(
+                        token,
+                        &DecodingKey::from_secret(secret.as_bytes()),
+                        &Validation::new(Algorithm::HS256),
+                    )
+                    .map_err(|_| "invalid")
+                });
+
+            match auth_result {
+                Ok(_) => svc.call(req).await.map(|r| r.map_into_left_body()),
+                Err(reason) => {
+                    let msg = if reason == "missing" {
+                        "No token provided"
+                    } else {
+                        "Invalid or expired token"
+                    };
+                    let response = HttpResponse::Unauthorized()
+                        .json(ErrorBody { error: msg.to_string() });
+                    let (http_req, _) = req.into_parts();
+                    Ok(ServiceResponse::new(http_req, response).map_into_right_body())
+                }
+            }
+        })
+    }
+}
+
+
 
 /// Returns Err(AppError::BadRequest) if the string is empty or whitespace-only.
 fn require_field<'a>(value: &'a Option<String>, field: &str) -> Result<&'a str, AppError> {
@@ -401,12 +558,28 @@ async fn main() -> std::io::Result<()> {
     println!("Connected to MongoDB");
     println!("Server starting on http://127.0.0.1:{}", port);
 
-    let app_state = web::Data::new(AppState { db, jwt_secret });
+    let app_state = web::Data::new(AppState { db, jwt_secret: jwt_secret.clone() });
 
     HttpServer::new(move || {
-        let cors = Cors::permissive();
+        // Explicit CORS: only allow the Angular dev server origin.
+        // Permissive CORS is replaced so the browser enforces origin checks.
+        let cors = Cors::default()
+            .allowed_origin("http://localhost:4200")
+            .allowed_methods(vec!["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+            .allowed_headers(vec![
+                header::AUTHORIZATION,
+                header::CONTENT_TYPE,
+                header::ACCEPT,
+            ])
+            .max_age(3600);
+
         App::new()
+            // CORS must wrap everything — register it first
             .wrap(cors)
+            // Log every request: METHOD /path -> STATUS
+            .wrap(RequestLogger)
+            // JWT auth gate — blocks protected routes without a valid token
+            .wrap(JwtAuth { jwt_secret: jwt_secret.clone() })
             .app_data(app_state.clone())
             // Return JSON for malformed request bodies instead of plain-text 400
             .app_data(
@@ -418,9 +591,11 @@ async fn main() -> std::io::Result<()> {
                         actix_web::error::InternalError::from_response(err, response).into()
                     }),
             )
+            // Public routes
             .route("/health", web::get().to(health_check))
             .route("/api/auth/register", web::post().to(register))
             .route("/api/auth/login", web::post().to(login))
+            // Protected routes (JWT middleware enforces auth above)
             .route("/api/auth/validate", web::get().to(validate_token))
             .route("/api/profile", web::post().to(create_profile))
     })
